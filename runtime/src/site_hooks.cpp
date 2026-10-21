@@ -106,8 +106,19 @@ public:
     void heal(std::uint32_t amount) override { call(0x802B1CE4u, actor_, amount); }
     // MarioActor::decLife(0): one point, as a hit takes it.
     void damage() override { call(0x802B1BECu, actor_, 0u); }
-    // GameDataFunction::addPlayerLeft / addStarPiece.
-    void add_lives(std::int32_t delta) override { call(0x803B021Cu, static_cast<std::uint32_t>(delta)); }
+    // As a 1-Up mushroom does it: MR::requestOneUp (the "1UP" board) and
+    // MR::incPlayerLeft. A life taken is GameDataFunction::addPlayerLeft(-1),
+    // not MR::decPlayerLeft, which also counts a miss in the save. The lives
+    // counter on screen only counts up, so a taken life shows on the next
+    // scene.
+    void add_lives(std::int32_t delta) override {
+        for (; delta > 0; --delta) {
+            call(0x803F8170u, 0u);
+            call(0x803CC3D0u, 0u);
+        }
+        if (delta < 0) call(0x803B021Cu, static_cast<std::uint32_t>(delta));
+    }
+    // GameDataFunction::addStarPiece.
     void add_star_bits(std::int32_t delta) override { call(0x803B02ECu, static_cast<std::uint32_t>(delta)); }
 
 private:
