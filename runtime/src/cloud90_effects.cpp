@@ -142,17 +142,6 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
         stick.stick_y = clamp_axis(2 * kStickCenterY - stick.stick_y);
     }
     if (active(Effect::Crouch, vi)) snapshot.nunchuk.z = true;
-    if (active(Effect::DrunkPointer, vi)) {
-        // The same shift for every IR dot, so the pointer moves (not turns).
-        const double t = static_cast<double>(vi) / 60.0;
-        const int dx = static_cast<int>(std::lround(std::sin(t * 1.3) * 180.0 + std::sin(t * 9.0) * 25.0));
-        const int dy = static_cast<int>(std::lround(std::cos(t * 1.1) * 130.0 + std::cos(t * 8.0) * 25.0));
-        for (auto& dot : snapshot.ir) {
-            if (!dot.visible) continue;
-            dot.x = static_cast<std::uint16_t>(std::clamp(static_cast<int>(dot.x) + dx, 0, 1023));
-            dot.y = static_cast<std::uint16_t>(std::clamp(static_cast<int>(dot.y) + dy, 0, 767));
-        }
-    }
     if (active(Effect::NoJump, vi)) {
         snapshot.buttons.a = false;
     } else if (active(Effect::AutoJump, vi)) {
@@ -186,13 +175,6 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
     }
 }
 
-void apply_pointer_effects(float& x, float& y, std::uint64_t vi) noexcept {
-    if (!g_in_play.load(std::memory_order_relaxed) || !active(Effect::DrunkPointer, vi)) return;
-    const double t = static_cast<double>(vi) / 60.0;
-    x = std::clamp(x + static_cast<float>(std::sin(t * 1.3) * 0.35 + std::sin(t * 9.0) * 0.05), -1.0f, 1.0f);
-    y = std::clamp(y + static_cast<float>(std::cos(t * 1.1) * 0.30 + std::cos(t * 8.0) * 0.05), -1.0f, 1.0f);
-}
-
 std::optional<Effect> effect_from_name(std::string_view name) noexcept {
     if (name == "invert_controls") return Effect::InvertControls;
     if (name == "auto_jump") return Effect::AutoJump;
@@ -202,7 +184,6 @@ std::optional<Effect> effect_from_name(std::string_view name) noexcept {
     if (name == "auto_run") return Effect::AutoRun;
     if (name == "paralyze") return Effect::Paralyze;
     if (name == "crouch") return Effect::Crouch;
-    if (name == "drunk_pointer") return Effect::DrunkPointer;
     if (name == "flip_screen") return Effect::FlipScreen;
     if (name == "mirror_screen") return Effect::MirrorScreen;
     if (name == "grayscale") return Effect::Grayscale;

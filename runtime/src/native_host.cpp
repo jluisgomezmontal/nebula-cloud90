@@ -32070,8 +32070,6 @@ void GuestAddressSpace::service_virtual_wiimote_input_device(
     galaxy::cloud90::apply_input_effects(
         snapshot, current_vi,
         play_context == galaxy::input::PlayContext::Play);
-    galaxy::cloud90::apply_pointer_effects(
-        host_pointer_metadata.pointer_x, host_pointer_metadata.pointer_y, current_vi);
     set_latest_native_hid_snapshot(
         snapshot,
         host_pointer_metadata.pointer_x,

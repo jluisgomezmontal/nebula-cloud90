@@ -1,7 +1,6 @@
 #include "galaxy/site_hooks.h"
 
 #include "galaxy/cloud90_game.h"
-#include "galaxy/cloud90_link.h"
 #include "galaxy/experimental_ultrawide_aspect.h"
 #include "galaxy/layout_aspect.h"
 #include "galaxy/layout_aspect_cinema.h"
@@ -154,19 +153,6 @@ public:
             guest_store_u32(memory_, coin_counter + 0x24u, static_cast<std::uint32_t>(coins()), services_, pc_);
     }
 
-    // Real coins: declared to Mario (MR::declareCoin; the shared pool takes
-    // more at any time) and popped out around him (MR::appearCoinCircle at
-    // his LiveActor::mPosition, +0x0C), with the game's coin sound.
-    void coin_rain(std::int32_t count) override {
-        // MR::getDeclareRemnantCoinCount before and after, and what
-        // appearCoinCircle answered, go to the link log (to diagnose).
-        const std::uint32_t before = call(0x803F09C4u, actor_);
-        call(0x803F0974u, actor_, static_cast<std::uint32_t>(count));
-        const std::uint32_t declared = call(0x803F09C4u, actor_);
-        const std::uint32_t appeared = call(0x803F0B84u, actor_, actor_ + 0x0Cu, static_cast<std::uint32_t>(count));
-        cloud90::log_event("coin_rain: remnant " + std::to_string(before) + " -> " + std::to_string(declared) +
-                           ", appeared=" + std::to_string(appeared & 0xFFu));
-    }
     // MR::changePlayerItemStatus -> MarioAccess::changeItemStatus.
     void item_status(std::int32_t status) override { call(0x803F2868u, static_cast<std::uint32_t>(status)); }
     // MR::shakeCameraVeryStrong.

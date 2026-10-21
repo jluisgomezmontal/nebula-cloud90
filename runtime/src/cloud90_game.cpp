@@ -54,7 +54,6 @@ bool useful(GameAction action, std::uint32_t health, std::uint32_t max_health, s
     case GameAction::StarBitsRemove: return star_bits > 0;
     case GameAction::CoinsAdd: return coins < 999;
     case GameAction::CoinsRemove: return coins > 0;
-    case GameAction::CoinRain: return true;
     case GameAction::LifeMushroom: return max_health <= 3;
     case GameAction::Rainbow: return g_rainbow_ready.load(std::memory_order_relaxed);
     case GameAction::CameraShake: return true;
@@ -74,7 +73,6 @@ std::optional<GameAction> game_action_from_name(std::string_view name) noexcept 
     if (name == "starbits_remove") return GameAction::StarBitsRemove;
     if (name == "coins_add") return GameAction::CoinsAdd;
     if (name == "coins_remove") return GameAction::CoinsRemove;
-    if (name == "coin_rain") return GameAction::CoinRain;
     if (name == "life_mushroom") return GameAction::LifeMushroom;
     if (name == "rainbow_star") return GameAction::Rainbow;
     if (name == "camera_shake") return GameAction::CameraShake;
@@ -135,7 +133,6 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
             break;
         case GameAction::CoinsAdd: player.add_coins(kCoinsStep); break;
         case GameAction::CoinsRemove: player.add_coins(-(coins < kCoinsStep ? coins : kCoinsStep)); break;
-        case GameAction::CoinRain: player.coin_rain(kCoinRainCount); break;
         case GameAction::LifeMushroom: player.item_status(kItemLifeUp); break;
         case GameAction::Rainbow: player.item_status(kItemRainbowStar); break;
         case GameAction::CameraShake:

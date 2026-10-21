@@ -29,8 +29,7 @@ public:
     void add_lives(std::int32_t delta) override { ++calls; left += delta; }
     void add_star_bits(std::int32_t delta) override { ++calls; bits += delta; }
     void add_coins(std::int32_t delta) override { ++calls; money += delta; }
-    int rained = 0, item = -1, shakes = 0;
-    void coin_rain(std::int32_t count) override { ++calls; rained += count; }
+    int item = -1, shakes = 0;
     void item_status(std::int32_t status) override {
         ++calls;
         item = status;
@@ -125,9 +124,7 @@ bool test_coins() {
 bool test_batch_two() {
     reset();
     FakePlayer p;
-    galaxy::cloud90::request_game_action(GameAction::CoinRain, 0);
-    galaxy::cloud90::on_player_frame(p, 0);
-    bool ok = expect(p.rained == galaxy::cloud90::kCoinRainCount, "coin rain");
+    bool ok = true;
     galaxy::cloud90::request_game_action(GameAction::LifeMushroom, 0);
     galaxy::cloud90::on_player_frame(p, 300);
     ok &= expect(p.item == galaxy::cloud90::kItemLifeUp && p.max_hp == 6, "life mushroom");

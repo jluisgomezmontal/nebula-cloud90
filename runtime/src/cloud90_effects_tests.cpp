@@ -140,19 +140,12 @@ bool test_paralyze_keeps_only_pause() {
     return ok;
 }
 
-bool test_crouch_and_drunk_pointer() {
+bool test_crouch() {
     galaxy::cloud90::reset_for_tests();
     galaxy::cloud90::enqueue(Effect::Crouch, 1000);
-    galaxy::cloud90::enqueue(Effect::DrunkPointer, 1000);
     auto s = stick(0x7b, 0x81);
-    s.ir[0] = {true, 500, 380, 2};
-    s.ir[1] = {true, 600, 380, 2};
     galaxy::cloud90::apply_input_effects(s, 100, true);
-    bool ok = expect(s.nunchuk.z, "Z held");
-    ok &= expect(s.ir[1].x - s.ir[0].x == 100 && (s.ir[0].x != 500 || s.ir[0].y != 380),
-                 "both dots moved together");
-    ok &= expect(!s.ir[2].visible, "hidden dots left alone");
-    return ok;
+    return expect(s.nunchuk.z, "Z held");
 }
 
 bool test_new_screen_effects_have_their_bits() {
@@ -169,7 +162,7 @@ bool test_new_screen_effects_have_their_bits() {
 int main() {
     bool ok = true;
     ok &= test_paralyze_keeps_only_pause();
-    ok &= test_crouch_and_drunk_pointer();
+    ok &= test_crouch();
     ok &= test_new_screen_effects_have_their_bits();
     ok &= test_invert_mirrors_the_stick_while_active();
     ok &= test_menus_freeze_the_timer_and_the_report();
