@@ -1,5 +1,6 @@
 #include "galaxy/cloud90_effects.h"
 
+#include "galaxy/cloud90_game.h"
 #include "galaxy/native_input.h"
 
 #include <algorithm>
@@ -91,6 +92,7 @@ void panic() noexcept {
         g_panic_requested = true;
     } catch (...) {
     }
+    clear_game_actions();
 }
 
 void set_paused(bool paused) noexcept { g_paused.store(paused, std::memory_order_relaxed); }

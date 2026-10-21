@@ -1,5 +1,6 @@
 #include "galaxy/gx/renderer_d3d12.h"
 #include "galaxy/cloud90_effects.h"
+#include "galaxy/cloud90_game.h"
 #include "galaxy/cloud90_link.h"
 #include "galaxy/crash_notes.h"
 #include "galaxy/gx/display_modes.h"
@@ -2216,9 +2217,19 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // the streamer's own test, so it also lifts a pause. F9 is the panic
         // key: ends every effect and pauses the chat's; F9 again resumes.
         // F7 tries the spin effect (5 s) the same way; F6 the next screen
-        // effect each press (8 s).
-        if (!was_down && (wp == VK_F6 || wp == VK_F7 || wp == VK_F8 || wp == VK_F9)) {
-            if (wp == VK_F6) {
+        // effect each press (8 s). F5 the next change to the game itself
+        // (heal, damage, 1-up, life down, star bits +/-) each press.
+        if (!was_down && (wp == VK_F5 || wp == VK_F6 || wp == VK_F7 || wp == VK_F8 || wp == VK_F9)) {
+            if (wp == VK_F5) {
+                static int s_next_action = 0;
+                constexpr int kCount = static_cast<int>(galaxy::cloud90::GameAction::Count);
+                galaxy::cloud90::set_paused(false);
+                galaxy::cloud90::request_game_action(
+                    static_cast<galaxy::cloud90::GameAction>(s_next_action),
+                    static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count()));
+                s_next_action = (s_next_action + 1) % kCount;
+            } else if (wp == VK_F6) {
                 static int s_next_screen = 0;
                 constexpr int kFirst = static_cast<int>(galaxy::cloud90::Effect::FlipScreen);
                 constexpr int kCount = static_cast<int>(galaxy::cloud90::Effect::Count) - kFirst;

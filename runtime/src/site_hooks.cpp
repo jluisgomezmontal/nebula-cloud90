@@ -1,5 +1,6 @@
 #include "galaxy/site_hooks.h"
 
+#include "galaxy/cloud90_game.h"
 #include "galaxy/experimental_ultrawide_aspect.h"
 #include "galaxy/layout_aspect.h"
 #include "galaxy/layout_aspect_cinema.h"
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <stdexcept>
 #include <string>
 
@@ -82,6 +84,64 @@ void fit_rmge01_scenario_camera(GuestMemoryV1* memory, const NativeServicesV1* s
     if (f32(projection) != x_scale) {
         guest_store_u32(memory, projection, std::bit_cast<std::uint32_t>(x_scale), services, pc);
     }
+}
+
+// Cloud90 Game Link phase 5: Mario's state through the game's own functions
+// (addresses from the CC0 Petari RMGE01 symbols), called from the
+// Cloud90Player hook on the game thread. Every call leaves the registers as it
+// found them.
+class GuestPlayer final : public cloud90::PlayerAccess {
+public:
+    GuestPlayer(const NativeServicesV1* services, PpcContext* context, GuestMemoryV1* memory,
+                std::uint32_t actor, std::uint32_t pc) noexcept
+        : services_(services), context_(context), memory_(memory), actor_(actor), pc_(pc) {}
+
+    // MarioActor::mHealth / mMaxHealth.
+    std::uint32_t health() override { return guest_load_u32(memory_, actor_ + 0x380u, services_, pc_); }
+    std::uint32_t max_health() override { return guest_load_u32(memory_, actor_ + 0x3E0u, services_, pc_); }
+    // GameDataFunction::getPlayerLeft / getStarPieceNum.
+    std::int32_t lives() override { return static_cast<std::int32_t>(call(0x803B01F0u, 0u)); }
+    std::int32_t star_bits() override { return static_cast<std::int32_t>(call(0x803B02DCu, 0u)); }
+    // MarioActor::incLife(u32): plays the game's own recovery sound.
+    void heal(std::uint32_t amount) override { call(0x802B1CE4u, actor_, amount); }
+    // MarioActor::decLife(0): one point, as a hit takes it.
+    void damage() override { call(0x802B1BECu, actor_, 0u); }
+    // GameDataFunction::addPlayerLeft / addStarPiece.
+    void add_lives(std::int32_t delta) override { call(0x803B021Cu, static_cast<std::uint32_t>(delta)); }
+    void add_star_bits(std::int32_t delta) override { call(0x803B02ECu, static_cast<std::uint32_t>(delta)); }
+
+private:
+    std::uint32_t call(std::uint32_t function, std::uint32_t r3, std::uint32_t r4 = 0u) {
+        std::uint32_t gpr[32];
+        std::copy(std::begin(context_->gpr), std::end(context_->gpr), gpr);
+        const std::uint32_t cr = context_->cr, lr = context_->lr, ctr = context_->ctr, xer = context_->xer;
+        context_->gpr[3] = r3;
+        context_->gpr[4] = r4;
+        services_->call_guest(services_->user, function, context_, memory_);
+        const std::uint32_t result = context_->gpr[3];
+        std::copy(std::begin(gpr), std::end(gpr), context_->gpr);
+        context_->cr = cr;
+        context_->lr = lr;
+        context_->ctr = ctr;
+        context_->xer = xer;
+        return result;
+    }
+
+    const NativeServicesV1* services_;
+    PpcContext* context_;
+    GuestMemoryV1* memory_;
+    std::uint32_t actor_;
+    std::uint32_t pc_;
+};
+
+void run_cloud90_player(const NativeServicesV1* services, PpcContext* context, GuestMemoryV1* memory,
+                        std::uint32_t pc) {
+    const std::uint32_t actor = context->gpr[30];
+    if (!rmge01_guest_object(actor) || services->call_guest == nullptr) return;
+    GuestPlayer player(services, context, memory, actor, pc);
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    cloud90::on_player_frame(
+        player, static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now).count()));
 }
 
 }  // namespace
@@ -165,6 +225,9 @@ void dispatch_site_hook(
         // The game, its HOME Menu and its message files all follow SCGetLanguage. The answer is
         // fixed at the first question of the session (game_language_for_boot).
         context->gpr[3] = static_cast<std::uint32_t>(game_language_for_boot());
+        return;
+    case SiteHookKind::Cloud90Player:
+        run_cloud90_player(services, context, memory, guest_pc);
         return;
     case SiteHookKind::LodDistance:
         // LodCtrl::update keeps the game's distances: which model shows is

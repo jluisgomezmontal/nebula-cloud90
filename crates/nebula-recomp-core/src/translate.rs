@@ -7670,6 +7670,13 @@ fn emit_direct_guest_call_with_exact_fpu(
         if target == 0x804D_0830 {
             output.push_str(&site_hook_call(pc, "Language", 0));
         }
+        // Cloud90 Game Link: MarioActor::updateBehavior's call to updateLife
+        // (MarioActor in r30). updateBehavior runs once per frame and only
+        // while Mario can move, so the runtime changes health, lives and star
+        // bits there, on the game's own thread.
+        if target == 0x802B_1CB4 && pc == 0x802B_0B20 {
+            output.push_str(&site_hook_call(pc, "Cloud90Player", 0));
+        }
         Ok(())
     }
 

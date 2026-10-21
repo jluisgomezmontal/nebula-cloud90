@@ -1,11 +1,13 @@
 ﻿// Fake Cloud90 for testing the game's link without the real API: accepts
 // the Bearer token "c90gl_test_token_0123456789", answers hello with welcome and one effect,
 // prints the game's messages. Needs `ws` (run from the backend's folder or
-// set NODE_PATH). Usage: node fake-server.mjs [port]
+// set NODE_PATH). Usage: node fake-server.mjs [port] [effect]
+// (effect: invert_controls by default; life_up, heal… need Mario in play).
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 
 const port = Number(process.argv[2] ?? 3999);
+const effect = process.argv[3] ?? 'invert_controls';
 const server = createServer();
 const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (req, socket, head) => {
@@ -20,7 +22,7 @@ server.on('upgrade', (req, socket, head) => {
       console.log('game â†’', JSON.stringify(m));
       if (m.type === 'hello') {
         ws.send(JSON.stringify({ type: 'welcome', game: 'smg' }));
-        ws.send(JSON.stringify({ type: 'effect', id: 'e1', effect: 'invert_controls', ms: 5000, by: 'Ana' }));
+        ws.send(JSON.stringify({ type: 'effect', id: 'e1', effect, ms: 5000, by: 'Ana' }));
       }
       if (m.type === 'ack') {
         console.log(m.ok ? 'ACK OK' : 'ACK FAIL ' + m.reason);

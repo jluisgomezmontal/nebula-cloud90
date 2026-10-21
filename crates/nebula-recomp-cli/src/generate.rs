@@ -40,7 +40,9 @@ use std::{fs, path::Path};
 //     dialogue text steps for the text speed setting (SiteHookKind 28) and the
 //     language setting's answer to SCGetLanguage (SiteHookKind 30); regenerate
 //     every module.
-pub const GENERATION_VERSION: u32 = 19;
+// 20 (Cloud90): Game Link's player hook after MarioActor::updateBehavior's
+//     updateLife (SiteHookKind 31); regenerate every module.
+pub const GENERATION_VERSION: u32 = 20;
 
 /// Shard size and per-shard source budget of the qualified module build.
 pub const MODULE_SHARD_SIZE: usize = 64;

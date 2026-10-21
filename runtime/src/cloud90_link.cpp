@@ -1,6 +1,7 @@
 #include "galaxy/cloud90_link.h"
 
 #include "galaxy/cloud90_effects.h"
+#include "galaxy/cloud90_game.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -311,14 +312,21 @@ void handle_message(Connection& conn, const std::string& msg) {
     const std::string type = json_string_field(msg, "type");
     if (type == "effect") {
         const std::string id = json_string_field(msg, "id");
-        const auto effect = effect_from_name(json_string_field(msg, "effect"));
+        const std::string name = json_string_field(msg, "effect");
+        const auto effect = effect_from_name(name);
+        // Phase 5: instant changes to the game (health, lives, star bits); no duration.
+        const auto action = effect ? std::nullopt : game_action_from_name(name);
         const long long ms = json_number_field(msg, "ms", 0);
+        const auto now_ms = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
         std::string reason;
-        if (!effect) reason = "efecto desconocido";
-        else if (ms <= 0) reason = "duración inválida";
+        if (!effect && !action) reason = "efecto desconocido";
+        else if (effect && ms <= 0) reason = "duración inválida";
         else if (paused()) reason = "en pausa";
-        else if (!effect_applicable(*effect)) reason = "no disponible ahora";
-        if (reason.empty())
+        else if (effect ? !effect_applicable(*effect) : !game_action_applicable(*action, now_ms))
+            reason = "no disponible ahora";
+        else if (action && !request_game_action(*action, now_ms)) reason = "no disponible ahora";
+        if (reason.empty() && effect)
             enqueue(*effect, static_cast<std::uint32_t>(std::min<long long>(ms, kMaxEffectMs)));
         conn.send("{\"type\":\"ack\",\"id\":\"" + escape(id) + "\",\"ok\":" + (reason.empty() ? "true" : "false") +
                   (reason.empty() ? "" : ",\"reason\":\"" + reason + "\"") + "}");

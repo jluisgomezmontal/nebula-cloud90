@@ -513,6 +513,9 @@ enum class SiteHookKind : std::uint32_t {
     // SCGetLanguage returned (r3); the runtime answers with the language setting. 29 is the
     // development line's SunCenter.
     Language = 30,
+    // Cloud90 Game Link: MarioActor::updateBehavior just ran updateLife, MarioActor in r30. Once
+    // per frame, and only while Mario can move.
+    Cloud90Player = 31,
 };
 
 inline void site_hook(
