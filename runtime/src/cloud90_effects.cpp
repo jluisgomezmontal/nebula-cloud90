@@ -28,6 +28,7 @@ std::vector<Pending> g_pending;   // guarded by g_mutex
 bool g_panic_requested = false;   // guarded by g_mutex
 std::atomic<bool> g_paused{false};
 std::atomic<bool> g_in_play{true};
+std::atomic<std::uint32_t> g_screen_flags{0};
 
 // Input thread only (plus remaining_vi, read on the same thread or in tests).
 std::array<std::uint64_t, kEffectCount> g_until{};  // VI an effect ends at
@@ -114,6 +115,13 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
         take_pending(vi);
     } catch (...) {
     }
+    // Screen effects: published for the renderer; none over menus.
+    std::uint32_t flags = 0;
+    if (in_play) {
+        for (auto e = static_cast<std::size_t>(Effect::FlipScreen); e < kEffectCount; ++e)
+            if (g_until[e] > vi) flags |= 1u << (e - static_cast<std::size_t>(Effect::FlipScreen));
+    }
+    g_screen_flags.store(flags, std::memory_order_relaxed);
     if (!in_play) return;
 
     auto& stick = snapshot.nunchuk;
@@ -154,10 +162,19 @@ std::optional<Effect> effect_from_name(std::string_view name) noexcept {
     if (name == "drunk_stick") return Effect::DrunkStick;
     if (name == "force_spin") return Effect::ForceSpin;
     if (name == "auto_run") return Effect::AutoRun;
+    if (name == "flip_screen") return Effect::FlipScreen;
+    if (name == "mirror_screen") return Effect::MirrorScreen;
+    if (name == "grayscale") return Effect::Grayscale;
+    if (name == "pixelate") return Effect::Pixelate;
+    if (name == "wobble_screen") return Effect::WobbleScreen;
+    if (name == "invert_colors") return Effect::InvertColors;
+    if (name == "tunnel_vision") return Effect::TunnelVision;
     return std::nullopt;
 }
 
 bool in_play() noexcept { return g_in_play.load(std::memory_order_relaxed); }
+
+std::uint32_t screen_effect_flags() noexcept { return g_screen_flags.load(std::memory_order_relaxed); }
 
 std::uint64_t remaining_vi(Effect effect, std::uint64_t vi) noexcept {
     if (effect >= Effect::Count) return 0;
@@ -179,6 +196,7 @@ void reset_for_tests() noexcept {
     g_spin_reports = 0;
     g_spin_previous_press = false;
     g_spin_frames_left = 0;
+    g_screen_flags.store(0);
 }
 
 }  // namespace galaxy::cloud90

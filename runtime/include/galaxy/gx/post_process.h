@@ -207,6 +207,8 @@ private:
     // both use RGBA8, so one pipeline each serves every target.
     Microsoft::WRL::ComPtr<ID3D12PipelineState> rcas_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> resample_;
+    // Cloud90 Game Link screen effects; optional (none if it fails to build).
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> effect_;
     Microsoft::WRL::ComPtr<ID3D12Resource> area_texture_;
     Microsoft::WRL::ComPtr<ID3D12Resource> search_texture_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtv_heap_;
@@ -216,6 +218,8 @@ private:
     Target weights_;
     Target antialiased_;
     Target scaled_;
+    // Source-sized image with the Cloud90 screen effects applied.
+    Target effected_;
     // SMAA's edge mask: the weight pass runs only where edge detection kept a
     // pixel. `rtv` holds its DSV.
     Target stencil_;

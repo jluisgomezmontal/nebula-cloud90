@@ -276,4 +276,39 @@ float4 PSMain(FullscreenOut i) : SV_Target {
 }
 #endif
 
+#if defined(PASS_EFFECT)
+// Cloud90 Game Link screen effects (phase 4), on the source-sized image
+// right after AA. g_params.x: flag bits (cloud90::screen_effect_flags),
+// g_params.y: seconds, for the moving ones. g_rt_metrics: 1/w, 1/h, w, h.
+Texture2D inputTex : register(t0);
+FullscreenOut VSMain(uint id : SV_VertexID) { return FullscreenTriangle(id); }
+float4 PSMain(FullscreenOut i) : SV_Target {
+    const uint flags = (uint)g_params.x;
+    const float t = g_params.y;
+    float2 uv = (float2(ViewportPixel(i.pos)) + 0.5) * g_rt_metrics.xy;
+    if (flags & 1u) uv.y = 1.0 - uv.y;                       // flip
+    if (flags & 2u) uv.x = 1.0 - uv.x;                       // mirror
+    if (flags & 16u) {                                       // wobble
+        uv += float2(sin(uv.y * 14.0 + t * 2.6), cos(uv.x * 11.0 + t * 2.1)) * 0.012;
+    }
+    bool blocky = false;
+    if (flags & 8u) {                                        // pixelate
+        const float2 cells = float2(96.0, 96.0 * g_rt_metrics.w * g_rt_metrics.x);
+        uv = (floor(uv * cells) + 0.5) / cells;
+        blocky = true;
+    }
+    uv = saturate(uv);
+    float3 c = blocky ? inputTex.SampleLevel(PointSampler, uv, 0).rgb
+                     : inputTex.SampleLevel(LinearSampler, uv, 0).rgb;
+    if (flags & 4u) c = dot(c, float3(0.299, 0.587, 0.114)); // grayscale
+    if (flags & 32u) c = 1.0 - c;                            // invert colors
+    if (flags & 64u) {                                       // tunnel vision
+        float2 d = uv - 0.5;
+        d.x *= g_rt_metrics.z * g_rt_metrics.y;              // round, not oval
+        c *= smoothstep(0.42, 0.18, length(d));
+    }
+    return float4(c, 1.0);
+}
+#endif
+
 #endif

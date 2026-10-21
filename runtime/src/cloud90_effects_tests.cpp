@@ -92,6 +92,23 @@ bool test_spin_sends_repeated_shake_bursts() {
     return ok;
 }
 
+bool test_screen_effects_are_published_as_flags() {
+    galaxy::cloud90::reset_for_tests();
+    galaxy::cloud90::enqueue(Effect::MirrorScreen, 2000);
+    galaxy::cloud90::enqueue(Effect::Grayscale, 2000);
+    WiimoteInputSnapshot s{};
+    galaxy::cloud90::apply_input_effects(s, 100, true);
+    const std::uint32_t mirror = 1u << (static_cast<int>(Effect::MirrorScreen) - static_cast<int>(Effect::FlipScreen));
+    const std::uint32_t gray = 1u << (static_cast<int>(Effect::Grayscale) - static_cast<int>(Effect::FlipScreen));
+    bool ok = expect(galaxy::cloud90::screen_effect_flags() == (mirror | gray), "mirror + grayscale on");
+    galaxy::cloud90::apply_input_effects(s, 110, false);
+    ok &= expect(galaxy::cloud90::screen_effect_flags() == 0u, "none over a menu");
+    galaxy::cloud90::apply_input_effects(s, 1000, true);
+    ok &= expect(galaxy::cloud90::screen_effect_flags() == 0u, "over after its time");
+    ok &= expect(galaxy::cloud90::effect_from_name("tunnel_vision") == Effect::TunnelVision, "name");
+    return ok;
+}
+
 }  // namespace
 
 int main() {
@@ -101,6 +118,7 @@ int main() {
     ok &= test_no_jump_beats_auto_jump_and_panic_clears();
     ok &= test_durations_are_clamped();
     ok &= test_spin_sends_repeated_shake_bursts();
+    ok &= test_screen_effects_are_published_as_flags();
     if (ok) std::cout << "cloud90 effects: all tests passed\n";
     return ok ? 0 : 1;
 }

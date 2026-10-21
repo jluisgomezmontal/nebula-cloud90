@@ -36,7 +36,9 @@ bool test_reads_the_servers_effect_message() {
 bool test_effect_names_match_the_backend_catalog() {
     using namespace galaxy::cloud90;
     bool ok = true;
-    for (const char* name : {"invert_controls", "auto_jump", "no_jump", "drunk_stick", "force_spin", "auto_run"})
+    for (const char* name : {"invert_controls", "auto_jump", "no_jump", "drunk_stick", "force_spin", "auto_run",
+                             "flip_screen", "mirror_screen", "grayscale", "pixelate", "wobble_screen",
+                             "invert_colors", "tunnel_vision"})
         ok &= expect(effect_from_name(name).has_value(), name);
     ok &= expect(!effect_from_name("explode").has_value(), "unknown effect");
     return ok;

@@ -35,6 +35,11 @@
 #include "post_fsr_rcas_ps.h"
 #include "post_resample_ps.h"
 #include "post_fxaa_ps.h"
+#include "post_effect_ps.h"
+
+#include "galaxy/cloud90_effects.h"
+
+#include <chrono>
 
 namespace galaxy::gx {
 namespace {
@@ -54,7 +59,7 @@ constexpr ShaderBytes bytes(const BYTE (&code)[N]) noexcept {
 constexpr DXGI_FORMAT kColorFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 constexpr DXGI_FORMAT kEdgesFormat = DXGI_FORMAT_R8G8_UNORM;
 constexpr DXGI_FORMAT kStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
-constexpr unsigned kRtvSlots = 4u;
+constexpr unsigned kRtvSlots = 5u;
 
 std::uint32_t bits(float value) noexcept { return std::bit_cast<std::uint32_t>(value); }
 
@@ -290,6 +295,9 @@ bool PostProcessor::initialize(ID3D12Device* device, ID3D12CommandQueue* queue,
         create_pipeline(code(bytes(g_post_fullscreen_vs)), code(bytes(g_post_fsr_easu_ps)), kColorFormat, 0, easu_) &&
         create_pipeline(code(bytes(g_post_fullscreen_vs)), code(bytes(g_post_fsr_rcas_ps)), kColorFormat, 0, rcas_) &&
         create_pipeline(code(bytes(g_post_fullscreen_vs)), code(bytes(g_post_resample_ps)), kColorFormat, 0, resample_);
+    // Cloud90 screen effects: if this one fails the game just plays without them.
+    if (!create_pipeline(code(bytes(g_post_fullscreen_vs)), code(bytes(g_post_effect_ps)), kColorFormat, 0, effect_))
+        std::cerr << "[post-process] cloud90 effect pipeline failed\n";
     if (!scaling) {
         std::cerr << "[post-process] pipeline creation failed\n";
         shutdown();
@@ -364,6 +372,7 @@ void PostProcessor::shutdown() noexcept {
     easu_.Reset();
     rcas_.Reset();
     resample_.Reset();
+    effect_.Reset();
     root_signature_.Reset();
     area_texture_.Reset();
     search_texture_.Reset();
@@ -373,6 +382,7 @@ void PostProcessor::shutdown() noexcept {
     weights_ = {};
     antialiased_ = {};
     scaled_ = {};
+    effected_ = {};
     stencil_ = {};
     retired_.clear();
     device_ = nullptr;
@@ -840,6 +850,32 @@ void PostProcessor::record(ID3D12GraphicsCommandList* list,
 
     list->SetGraphicsRootSignature(root_signature_.Get());
     list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    // Cloud90 Game Link screen effects: one pass on the source-sized image,
+    // only while some effect is on; the scaling below reads its result.
+    const std::uint32_t screen_fx = galaxy::cloud90::screen_effect_flags();
+    if (screen_fx != 0u && effect_ &&
+        ensure_target(effected_, source_width, source_height, kColorFormat, 4u,
+                      frame_index, frames_in_flight)) {
+        static const auto t0 = std::chrono::steady_clock::now();
+        const float seconds =
+            std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
+        Constants fx{};
+        fx.rt_metrics[0] = 1.0f / static_cast<float>(source_width);
+        fx.rt_metrics[1] = 1.0f / static_cast<float>(source_height);
+        fx.rt_metrics[2] = static_cast<float>(source_width);
+        fx.rt_metrics[3] = static_cast<float>(source_height);
+        fx.params[0] = static_cast<float>(screen_fx);
+        fx.params[1] = std::fmod(seconds, 1000.0f);
+        const D3D12_VIEWPORT source_sized{
+            0.0f, 0.0f, static_cast<float>(source_width), static_cast<float>(source_height), 0.0f, 1.0f};
+        transition(list, effected_, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        list->OMSetRenderTargets(1, &effected_.rtv, FALSE, nullptr);
+        draw(list, srv_ring, effect_.Get(), {image}, {kColorFormat}, source_sized, fx);
+        transition(list, effected_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        image = effected_.resource.Get();
+    }
+
     const D3D12_VIEWPORT window_sized{
         0.0f, 0.0f, static_cast<float>(target_width), static_cast<float>(target_height), 0.0f, 1.0f};
     Constants c{};

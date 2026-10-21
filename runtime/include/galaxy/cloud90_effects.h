@@ -22,6 +22,14 @@ enum class Effect : std::uint8_t {
     DrunkStick,      // the stick drifts in slow circles
     ForceSpin,       // Wii Remote shakes (spin)
     AutoRun,         // stick held forward
+    // Screen (post-process pass, phase 4): bits of screen_effect_flags().
+    FlipScreen,      // upside down
+    MirrorScreen,    // left-right mirror
+    Grayscale,       // black and white
+    Pixelate,        // big pixels
+    WobbleScreen,    // wavy "drunk" image
+    InvertColors,    // negative
+    TunnelVision,    // dark edges, small circle in the middle
     Count,
 };
 
@@ -50,6 +58,10 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
 
 // The id Cloud90 sends ("invert_controls"…) → the effect, if known.
 [[nodiscard]] std::optional<Effect> effect_from_name(std::string_view name) noexcept;
+
+// Screen effects active now, as bits (1 << (effect - FlipScreen)); 0 in
+// menus. Read by the renderer each frame (any thread).
+[[nodiscard]] std::uint32_t screen_effect_flags() noexcept;
 
 // Whether the last report was during play (not a menu), for the link to
 // tell Cloud90 to hold effects.
