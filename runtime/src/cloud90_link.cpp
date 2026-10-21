@@ -5,10 +5,13 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
+#include <dpapi.h>
+#include <wincrypt.h>
 #include <winhttp.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -19,6 +22,7 @@
 #include <vector>
 
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "crypt32.lib")
 
 namespace galaxy::cloud90 {
 namespace {
@@ -26,10 +30,17 @@ namespace {
 constexpr const wchar_t* kDefaultServer = L"https://backcloud90devstreamkit.onrender.com";
 constexpr const wchar_t* kPath = L"/api/game-link/ws";
 constexpr auto kPingEvery = std::chrono::seconds(20);
+// DPAPI entropy: the token file only opens for this Windows user and this
+// purpose (tools\cloud90\set-token.ps1 uses the same).
+constexpr char kEntropy[] = "Cloud90GameLink";
 
 std::mutex g_status_mutex;
 std::string g_status = "sin iniciar";  // guarded by g_status_mutex
+std::string g_ui_status = "OFF";        // guarded by g_status_mutex
 std::atomic<bool> g_started{false};
+// Bumped when the token changes (F1 page): the link drops its connection
+// and starts over with the new one.
+std::atomic<unsigned> g_generation{0};
 
 std::filesystem::path data_dir() {
     wchar_t buf[MAX_PATH]{};
@@ -38,10 +49,14 @@ std::filesystem::path data_dir() {
     return std::filesystem::path(buf) / L"Nebula";
 }
 
-void log_line(const std::string& line) {
+std::filesystem::path config_path() { return data_dir() / L"cloud90-link.ini"; }
+
+// `line` for the log, `ui` for the F1 page (its font: capitals, no accents).
+void set_status(const std::string& line, const std::string& ui) {
     {
         const std::lock_guard<std::mutex> lock(g_status_mutex);
         g_status = line;
+        g_ui_status = ui;
     }
     std::fprintf(stderr, "[cloud90] %s\n", line.c_str());
     try {
@@ -104,17 +119,65 @@ bool parse_server(const std::wstring& url, LinkConfig& cfg) {
     return !cfg.host.empty();
 }
 
-bool read_config(LinkConfig& cfg) {
-    std::ifstream in(data_dir() / L"cloud90-link.ini");
+bool valid_token(const std::string& t) {
+    if (t.rfind("c90gl_", 0) != 0 || t.size() < 20 || t.size() > 100) return false;
+    return std::all_of(t.begin(), t.end(), [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-';
+    });
+}
+
+struct StoredConfig {
+    std::string token;
     std::string server;
+    bool was_plain = false;
+};
+
+StoredConfig read_stored() {
+    StoredConfig out;
+    std::ifstream in(config_path());
     std::string line;
     while (std::getline(in, line)) {
         line = trim(line);
-        if (line.rfind("token=", 0) == 0) cfg.token = trim(line.substr(6));
-        if (line.rfind("server=", 0) == 0) server = trim(line.substr(7));
+        if (line.rfind("token_protected=", 0) == 0) {
+            out.token = unprotect_token(trim(line.substr(16)));
+        } else if (line.rfind("token=", 0) == 0 && out.token.empty()) {
+            out.token = trim(line.substr(6));  // older set-token: plain text
+            out.was_plain = true;
+        } else if (line.rfind("server=", 0) == 0) {
+            out.server = trim(line.substr(7));
+        }
     }
-    if (cfg.token.empty() || cfg.token.size() > 100) return false;
-    return parse_server(server.empty() ? std::wstring(kDefaultServer) : widen(server), cfg);
+    return out;
+}
+
+bool write_stored(const std::string& token, const std::string& server) {
+    try {
+        std::filesystem::create_directories(data_dir());
+        const std::filesystem::path tmp = config_path().wstring() + L".tmp";
+        {
+            std::ofstream out(tmp, std::ios::trunc);
+            if (!token.empty()) {
+                const std::string sealed = protect_token(token);
+                if (sealed.empty()) return false;
+                out << "token_protected=" << sealed << '\n';
+            }
+            if (!server.empty()) out << "server=" << server << '\n';
+            if (!out) return false;
+        }
+        std::filesystem::rename(tmp, config_path());
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool read_config(LinkConfig& cfg) {
+    StoredConfig stored = read_stored();
+    // A token left in plain text by an older set-token gets sealed now.
+    if (stored.was_plain && valid_token(stored.token)) (void)write_stored(stored.token, stored.server);
+    if (!valid_token(stored.token)) return false;
+    cfg.token = stored.token;
+    return parse_server(stored.server.empty() ? std::wstring(kDefaultServer) : widen(stored.server), cfg);
 }
 
 std::string escape(const std::string& s) {
@@ -230,6 +293,15 @@ private:
     std::mutex send_mutex_;
 };
 
+// The connection the link thread is using, so a token change can drop it.
+std::mutex g_current_mutex;
+Connection* g_current = nullptr;  // guarded by g_current_mutex
+
+void drop_current_connection() {
+    const std::lock_guard<std::mutex> lock(g_current_mutex);
+    if (g_current) g_current->abort();
+}
+
 std::string state_message() {
     return std::string("{\"type\":\"state\",\"paused\":") + (paused() ? "true" : "false") +
            ",\"inPlay\":" + (in_play() ? "true" : "false") + "}";
@@ -245,6 +317,7 @@ void handle_message(Connection& conn, const std::string& msg) {
         if (!effect) reason = "efecto desconocido";
         else if (ms <= 0) reason = "duración inválida";
         else if (paused()) reason = "en pausa";
+        else if (!effect_applicable(*effect)) reason = "no disponible ahora";
         if (reason.empty())
             enqueue(*effect, static_cast<std::uint32_t>(std::min<long long>(ms, kMaxEffectMs)));
         conn.send("{\"type\":\"ack\",\"id\":\"" + escape(id) + "\",\"ok\":" + (reason.empty() ? "true" : "false") +
@@ -255,18 +328,42 @@ void handle_message(Connection& conn, const std::string& msg) {
         else set_paused(false);
         conn.send(state_message());
     } else if (type == "welcome") {
-        log_line("conectado a Cloud90");
+        set_status("conectado a Cloud90", "CONNECTED");
     }
 }
 
-void link_thread(LinkConfig cfg) {
+// Waits up to `d`, or less if the token changes.
+void wait_or_token_change(std::chrono::seconds d, unsigned generation) {
+    const auto until = std::chrono::steady_clock::now() + d;
+    while (std::chrono::steady_clock::now() < until && g_generation.load() == generation)
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+}
+
+void link_thread() {
     auto backoff = std::chrono::seconds(2);
+    unsigned last_generation = g_generation.load();
     for (;;) {
-        log_line("conectando…");
+        const unsigned generation = g_generation.load();
+        if (generation != last_generation) {
+            backoff = std::chrono::seconds(2);
+            last_generation = generation;
+        }
+        LinkConfig cfg;
+        if (!read_config(cfg)) {
+            set_status("sin token: pégalo en F1 > CLOUD90 o con tools\\cloud90\\set-token.cmd", "NO TOKEN");
+            wait_or_token_change(std::chrono::seconds(3600), generation);
+            continue;
+        }
+        set_status("conectando…", "CONNECTING");
         Connection conn;
         std::string error;
+        USHORT code = 0;
         if (conn.open(cfg, error)) {
             backoff = std::chrono::seconds(2);
+            {
+                const std::lock_guard<std::mutex> lock(g_current_mutex);
+                g_current = &conn;
+            }
             conn.send(std::string("{\"type\":\"hello\",\"game\":\"smg\",\"version\":\"") + kLinkVersion + "\"}");
             conn.send(state_message());
             // Pings and state changes from a side thread; receive blocks here.
@@ -288,17 +385,25 @@ void link_thread(LinkConfig cfg) {
                 }
             });
             std::string msg;
-            USHORT code = 0;
             std::string reason;
             while (conn.receive(msg, code, reason)) handle_message(conn, msg);
             alive.store(false);
             side.join();
+            {
+                const std::lock_guard<std::mutex> lock(g_current_mutex);
+                g_current = nullptr;
+            }
             error = reason.empty() ? "conexión perdida" : reason;
             // Refused for good (bad token, no access, old version): wait long.
             if (code == 4401 || code == 4403 || code == 4426 || code == 4400) backoff = std::chrono::seconds(60);
         }
-        log_line("desconectado: " + error + "; reintento en " + std::to_string(backoff.count()) + " s");
-        std::this_thread::sleep_for(backoff);
+        if (g_generation.load() != generation) continue;  // new token: right away
+        const std::string ui = code == 4401 ? "TOKEN REJECTED"
+            : code == 4403                  ? "NO ACCESS"
+            : code == 4426                  ? "UPDATE THE GAME"
+                                            : "OFFLINE - RETRYING";
+        set_status("desconectado: " + error + "; reintento en " + std::to_string(backoff.count()) + " s", ui);
+        wait_or_token_change(backoff, generation);
         backoff = std::min(backoff * 2, std::chrono::seconds(60));
     }
 }
@@ -310,14 +415,10 @@ void start_link() noexcept {
     try {
         std::filesystem::create_directories(data_dir());
         std::ofstream(data_dir() / L"cloud90-link.log", std::ios::trunc);
-        LinkConfig cfg;
-        if (!read_config(cfg)) {
-            log_line("sin token: corre tools\\cloud90\\set-token.cmd para conectar con Cloud90");
-            return;
-        }
-        std::thread(link_thread, cfg).detach();
+        // Always on: with no token it waits for one (F1 > CLOUD90).
+        std::thread(link_thread).detach();
     } catch (...) {
-        log_line("no se pudo iniciar la conexión con Cloud90");
+        set_status("no se pudo iniciar la conexión con Cloud90", "ERROR");
     }
 }
 
@@ -325,6 +426,96 @@ std::string link_status() {
     const std::lock_guard<std::mutex> lock(g_status_mutex);
     return g_status;
 }
+
+std::string link_ui_status() {
+    const std::lock_guard<std::mutex> lock(g_status_mutex);
+    return g_ui_status;
+}
+
+std::string token_hint() {
+    const std::string t = read_stored().token;
+    if (!valid_token(t)) return "NOT SET";
+    std::string tail = t.substr(t.size() - 4);
+    for (char& c : tail) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return "C90GL_...." + tail;
+}
+
+bool save_token(const std::string& raw) {
+    const std::string token = trim(raw);
+    if (!valid_token(token)) return false;
+    if (!write_stored(token, read_stored().server)) return false;
+    ++g_generation;
+    drop_current_connection();
+    return true;
+}
+
+bool clear_token() {
+    if (!write_stored("", read_stored().server)) return false;
+    ++g_generation;
+    drop_current_connection();
+    return true;
+}
+
+PasteResult paste_token_from_clipboard() {
+    std::string text;
+    if (OpenClipboard(nullptr)) {
+        if (HANDLE data = GetClipboardData(CF_UNICODETEXT)) {
+            if (const auto* w = static_cast<const wchar_t*>(GlobalLock(data))) {
+                const int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+                if (n > 1 && n < 4096) {
+                    text.resize(static_cast<std::size_t>(n));
+                    WideCharToMultiByte(CP_UTF8, 0, w, -1, text.data(), n, nullptr, nullptr);
+                    text.resize(static_cast<std::size_t>(n - 1));
+                }
+                GlobalUnlock(data);
+            }
+        }
+        CloseClipboard();
+    }
+    if (!valid_token(trim(text))) return PasteResult::NotAToken;
+    return save_token(text) ? PasteResult::Saved : PasteResult::SaveFailed;
+}
+
+std::string protect_token(const std::string& token) {
+    DATA_BLOB in{static_cast<DWORD>(token.size()), reinterpret_cast<BYTE*>(const_cast<char*>(token.data()))};
+    DATA_BLOB entropy{static_cast<DWORD>(sizeof kEntropy - 1),
+                      reinterpret_cast<BYTE*>(const_cast<char*>(kEntropy))};
+    DATA_BLOB out{};
+    if (!CryptProtectData(&in, L"Cloud90 Game Link", &entropy, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out))
+        return {};
+    DWORD chars = 0;
+    std::string b64;
+    if (CryptBinaryToStringA(out.pbData, out.cbData, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &chars)) {
+        b64.resize(chars);
+        if (CryptBinaryToStringA(out.pbData, out.cbData, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, b64.data(),
+                                 &chars))
+            b64.resize(chars);
+        else
+            b64.clear();
+    }
+    LocalFree(out.pbData);
+    return b64;
+}
+
+std::string unprotect_token(const std::string& base64) {
+    DWORD size = 0;
+    if (base64.empty() || base64.size() > 4096 ||
+        !CryptStringToBinaryA(base64.c_str(), 0, CRYPT_STRING_BASE64, nullptr, &size, nullptr, nullptr))
+        return {};
+    std::vector<BYTE> sealed(size);
+    if (!CryptStringToBinaryA(base64.c_str(), 0, CRYPT_STRING_BASE64, sealed.data(), &size, nullptr, nullptr))
+        return {};
+    DATA_BLOB in{size, sealed.data()};
+    DATA_BLOB entropy{static_cast<DWORD>(sizeof kEntropy - 1),
+                      reinterpret_cast<BYTE*>(const_cast<char*>(kEntropy))};
+    DATA_BLOB out{};
+    if (!CryptUnprotectData(&in, nullptr, &entropy, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out)) return {};
+    std::string token(reinterpret_cast<char*>(out.pbData), out.cbData);
+    SecureZeroMemory(out.pbData, out.cbData);
+    LocalFree(out.pbData);
+    return token;
+}
+
 
 // The server sends compact JSON.stringify output with flat fields.
 std::string json_string_field(const std::string& json, const char* key) {

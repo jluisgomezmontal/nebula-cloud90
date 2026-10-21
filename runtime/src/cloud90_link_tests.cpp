@@ -44,6 +44,32 @@ bool test_effect_names_match_the_backend_catalog() {
     return ok;
 }
 
+bool test_token_is_stored_sealed() {
+    using namespace galaxy::cloud90;
+    bool ok = expect(unprotect_token(protect_token("c90gl_abcdefghijklmnopqrst")) == "c90gl_abcdefghijklmnopqrst",
+                     "DPAPI round trip");
+    ok &= expect(unprotect_token("not base64 at all").empty(), "garbage stays empty");
+    // A private LOCALAPPDATA so the real token is never touched.
+    wchar_t tmp[MAX_PATH]{};
+    GetTempPathW(MAX_PATH, tmp);
+    const std::wstring dir = std::wstring(tmp) + L"cloud90-token-test";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    SetEnvironmentVariableW(L"LOCALAPPDATA", dir.c_str());
+    ok &= expect(!save_token("hola"), "rejects a non-token");
+    ok &= expect(save_token("  c90gl_abcdefghijklmnopWXYZ  "), "saves a token");
+    ok &= expect(token_hint() == "C90GL_....WXYZ", "hint shows the last four");
+    std::string file;
+    if (FILE* in = _wfopen((dir + L"\\Nebula\\cloud90-link.ini").c_str(), L"rb")) {
+        char buf[4096];
+        file.assign(buf, fread(buf, 1, sizeof buf, in));
+        fclose(in);
+    }
+    ok &= expect(file.find("token_protected=") == 0, "stored sealed");
+    ok &= expect(file.find("c90gl_") == std::string::npos, "never in plain text");
+    ok &= expect(clear_token() && token_hint() == "NOT SET", "removed");
+    return ok;
+}
+
 // --live: against a server on localhost (tools/cloud90/fake-server.mjs),
 // with LOCALAPPDATA pointing at a folder holding its cloud90-link.ini.
 bool live_round_trip() {
@@ -68,9 +94,15 @@ bool live_round_trip() {
 
 int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--live") return live_round_trip() ? 0 : 1;
+    // --unseal <base64>: what set-token.ps1 sealed, as the runtime reads it.
+    if (argc > 2 && std::string(argv[1]) == "--unseal") {
+        std::cout << galaxy::cloud90::unprotect_token(argv[2]) << '\n';
+        return 0;
+    }
     bool ok = true;
     ok &= test_reads_the_servers_effect_message();
     ok &= test_effect_names_match_the_backend_catalog();
+    ok &= test_token_is_stored_sealed();
     if (ok) std::cout << "cloud90 link: all tests passed\n";
     return ok ? 0 : 1;
 }

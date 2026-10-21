@@ -63,6 +63,14 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
 // menus. Read by the renderer each frame (any thread).
 [[nodiscard]] std::uint32_t screen_effect_flags() noexcept;
 
+// What the game allows right now (input thread, each report). Mario has no
+// spin in the prologue (the Luma gives it to him after).
+void set_spin_available(bool available) noexcept;
+
+// Whether an effect would show now: false for the spin before Mario has
+// it. The link answers "no disponible ahora" instead of queueing it.
+[[nodiscard]] bool effect_applicable(Effect effect) noexcept;
+
 // Whether the last report was during play (not a menu), for the link to
 // tell Cloud90 to hold effects.
 [[nodiscard]] bool in_play() noexcept;

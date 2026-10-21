@@ -29,6 +29,7 @@ bool g_panic_requested = false;   // guarded by g_mutex
 std::atomic<bool> g_paused{false};
 std::atomic<bool> g_in_play{true};
 std::atomic<std::uint32_t> g_screen_flags{0};
+std::atomic<bool> g_spin_available{true};
 
 // Input thread only (plus remaining_vi, read on the same thread or in tests).
 std::array<std::uint64_t, kEffectCount> g_until{};  // VI an effect ends at
@@ -148,7 +149,8 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
     // pressed, re-pressed every kSpinEveryReports so each burst reads as a
     // new shake (a steady shake doesn't). A burst in progress finishes even
     // when the effect ends.
-    const bool spinning = active(Effect::ForceSpin, vi);
+    const bool spinning =
+        active(Effect::ForceSpin, vi) && g_spin_available.load(std::memory_order_relaxed);
     const bool press = spinning && (g_spin_reports++ % kSpinEveryReports) < 2u;
     if (!spinning) g_spin_reports = 0;
     (void)galaxy::input::advance_wiimote_shake_accel(
@@ -174,6 +176,15 @@ std::optional<Effect> effect_from_name(std::string_view name) noexcept {
 
 bool in_play() noexcept { return g_in_play.load(std::memory_order_relaxed); }
 
+void set_spin_available(bool available) noexcept {
+    g_spin_available.store(available, std::memory_order_relaxed);
+}
+
+bool effect_applicable(Effect effect) noexcept {
+    if (effect == Effect::ForceSpin) return g_spin_available.load(std::memory_order_relaxed);
+    return effect < Effect::Count;
+}
+
 std::uint32_t screen_effect_flags() noexcept { return g_screen_flags.load(std::memory_order_relaxed); }
 
 std::uint64_t remaining_vi(Effect effect, std::uint64_t vi) noexcept {
@@ -197,6 +208,7 @@ void reset_for_tests() noexcept {
     g_spin_previous_press = false;
     g_spin_frames_left = 0;
     g_screen_flags.store(0);
+    g_spin_available.store(true);
 }
 
 }  // namespace galaxy::cloud90

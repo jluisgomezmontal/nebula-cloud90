@@ -109,6 +109,19 @@ bool test_screen_effects_are_published_as_flags() {
     return ok;
 }
 
+bool test_spin_is_not_applicable_in_the_prologue() {
+    galaxy::cloud90::reset_for_tests();
+    galaxy::cloud90::set_spin_available(false);
+    bool ok = expect(!galaxy::cloud90::effect_applicable(Effect::ForceSpin), "no spin yet");
+    ok &= expect(galaxy::cloud90::effect_applicable(Effect::InvertControls), "others still apply");
+    galaxy::cloud90::enqueue(Effect::ForceSpin, 5000);
+    WiimoteInputSnapshot s{};
+    galaxy::cloud90::apply_input_effects(s, 10, true);
+    ok &= expect(s.accel.x != 0x02f0u && s.accel.x != 0x0110u, "no shake sent");
+    galaxy::cloud90::set_spin_available(true);
+    return ok;
+}
+
 }  // namespace
 
 int main() {
@@ -119,6 +132,7 @@ int main() {
     ok &= test_durations_are_clamped();
     ok &= test_spin_sends_repeated_shake_bursts();
     ok &= test_screen_effects_are_published_as_flags();
+    ok &= test_spin_is_not_applicable_in_the_prologue();
     if (ok) std::cout << "cloud90 effects: all tests passed\n";
     return ok ? 0 : 1;
 }

@@ -99,7 +99,7 @@ int main() {
     passed &= expect(!snapshot.visible, "overlay starts hidden");
     passed &= expect(!snapshot.dirty, "overlay starts clean");
     passed &= expect(!snapshot.save_error, "overlay starts without a save error");
-    passed &= expect(snapshot.tab_count == 5u, "display/graphics/controls/audio/general tabs exist");
+    passed &= expect(snapshot.tab_count == 6u, "display/graphics/controls/audio/general/cloud90 tabs exist");
     passed &= expect(snapshot.tab == 0u && snapshot.row == 0u, "display row zero is selected");
     passed &= expect(
         snapshot.row_count == 8u,
@@ -403,12 +403,15 @@ int main() {
     passed &= expect(key(VK_LEFT) && key(VK_LEFT) && galaxy::get_runtime_settings().language == galaxy::GameLanguage::English,
                      "left returns to English");
     passed &= expect(key(VK_UP) && galaxy::gx::native_settings_overlay_snapshot().row == 0u, "up returns to text speed");
+    passed &= expect(
+        key(VK_TAB) && galaxy::gx::native_settings_overlay_snapshot().tab == 5u,
+        "Tab goes on to the CLOUD90 page");
     passed &= expect(key(VK_TAB), "Tab navigation wraps");
     passed &= expect(
         galaxy::gx::native_settings_overlay_snapshot().tab == 0u,
         "Tab wraps back to video");
     passed &= expect(
-        key(VK_PRIOR) && galaxy::gx::native_settings_overlay_snapshot().tab == 4u,
+        key(VK_PRIOR) && galaxy::gx::native_settings_overlay_snapshot().tab == 5u,
         "Page Up (controller LB) selects the previous page, wrapping");
     passed &= expect(
         key(VK_NEXT) && galaxy::gx::native_settings_overlay_snapshot().tab == 0u,

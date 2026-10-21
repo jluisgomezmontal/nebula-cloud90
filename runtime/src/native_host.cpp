@@ -31862,6 +31862,30 @@ void publish_rumble_state(const GuestAddressSpace& space, bool motor_on) noexcep
     publish_rumble_request(request);
 }
 
+// Cloud90 Game Link: the prologue (Toad Town, before the Luma gives Mario
+// the spin). Current stage name inline at GameSystem->+0x24 (the scene
+// controller) +0x20, as opening_route_marker_guard.h reads it.
+bool read_in_prologue(const GuestAddressSpace& space) noexcept {
+    const auto load = [&space](std::uint32_t address) -> std::optional<std::uint32_t> {
+        if (address < 0x80000000u || address > 0x817FFFFCu || (address & 3u) != 0u) return std::nullopt;
+        const std::byte* bytes = space.pointer_or_null(address, 4u);
+        if (bytes == nullptr) return std::nullopt;
+        return static_cast<std::uint32_t>(bytes[0]) << 24 | static_cast<std::uint32_t>(bytes[1]) << 16 |
+               static_cast<std::uint32_t>(bytes[2]) << 8 | static_cast<std::uint32_t>(bytes[3]);
+    };
+    constexpr std::string_view kPrologue = "PeachCastleGardenGalaxy";
+    const std::optional<std::uint32_t> game_system = load(0x806A1228u);
+    if (!game_system || *game_system == 0u) return false;
+    const std::optional<std::uint32_t> controller = load(*game_system + 0x24u);
+    if (!controller || *controller < 0x80000000u || *controller > 0x817FFF00u) return false;
+    const std::byte* name =
+        space.pointer_or_null(*controller + 0x20u, static_cast<std::uint32_t>(kPrologue.size() + 1u));
+    if (name == nullptr) return false;
+    for (std::size_t i = 0; i < kPrologue.size(); ++i)
+        if (static_cast<char>(name[i]) != kPrologue[i]) return false;
+    return name[kPrologue.size()] == std::byte{0};
+}
+
 galaxy::input::PlayContext read_play_context(const GuestAddressSpace& space,
                                              std::uint64_t current_vi) noexcept {
     const std::optional<std::uint32_t> mode = read_star_pointer_mode(space);
@@ -32042,6 +32066,7 @@ void GuestAddressSpace::service_virtual_wiimote_input_device(
             play_context,
             read_tilt_section(*this));
     // Cloud90 Game Link: live-stream effects on this report (menus untouched).
+    galaxy::cloud90::set_spin_available(!read_in_prologue(*this));
     galaxy::cloud90::apply_input_effects(
         snapshot, current_vi,
         play_context == galaxy::input::PlayContext::Play);

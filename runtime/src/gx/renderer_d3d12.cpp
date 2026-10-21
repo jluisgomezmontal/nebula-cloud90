@@ -1,5 +1,6 @@
 #include "galaxy/gx/renderer_d3d12.h"
 #include "galaxy/cloud90_effects.h"
+#include "galaxy/cloud90_link.h"
 #include "galaxy/crash_notes.h"
 #include "galaxy/gx/display_modes.h"
 
@@ -226,7 +227,10 @@ std::uint32_t s_handled_key_normalized = 0u;
 // Publish/consume both dimensions together; exchange cannot clear a newer size.
 std::atomic<std::uint64_t> s_pending_resize_extent{0};
 
-constexpr unsigned kNativeSettingsTabCount = 5;
+constexpr unsigned kNativeSettingsTabCount = 6;
+// CLOUD90 page (Game Link): connection status and the token, pasted from the
+// clipboard; nothing here goes through the settings draft.
+constexpr unsigned kCloud90Tab = 5u;
 
 // The GENERAL page's languages, in the order LEFT/RIGHT steps through them.
 constexpr GameLanguage kGameLanguages[] = {GameLanguage::English, GameLanguage::French, GameLanguage::Spanish};
@@ -691,6 +695,7 @@ unsigned native_settings_row_count(unsigned tab) {
     case 2: return controls_row_count();
     case 3: return 6u;
     case 4: return 2u;
+    case 5: return 5u;
     default: return 0u;
     }
 }
@@ -1285,6 +1290,40 @@ bool handle_controls_key(WPARAM key, bool was_down, bool from_pad) {
     }
 }
 
+// CLOUD90 page: ENTER pastes or removes the token, LEFT/RIGHT/ENTER turn
+// effects on or off. The footer shows what happened.
+bool handle_cloud90_key(WPARAM key, bool was_down) {
+    if (s_native_settings_tab.load(std::memory_order_relaxed) % kNativeSettingsTabCount != kCloud90Tab) return false;
+    const unsigned row = s_native_settings_row.load(std::memory_order_relaxed);
+    const auto say = [](const char* text) {
+        s_controls_message = text;
+        s_controls_message_until_ms = GetTickCount64() + 3000u;
+    };
+    const bool toggle = row == 3u && (key == VK_LEFT || key == VK_RIGHT || key == VK_RETURN);
+    if (toggle) {
+        if (!was_down) {
+            if (galaxy::cloud90::paused()) galaxy::cloud90::set_paused(false);
+            else galaxy::cloud90::panic();
+        }
+        return true;
+    }
+    if (key != VK_RETURN) return false;
+    if (was_down) return true;
+    if (row == 2u) {
+        switch (galaxy::cloud90::paste_token_from_clipboard()) {
+        case galaxy::cloud90::PasteResult::Saved: say("TOKEN SAVED - CONNECTING"); break;
+        case galaxy::cloud90::PasteResult::NotAToken: say("COPY YOUR TOKEN FROM CLOUD90 FIRST"); break;
+        case galaxy::cloud90::PasteResult::SaveFailed: say("COULD NOT SAVE THE TOKEN"); break;
+        }
+        return true;
+    }
+    if (row == 4u) {
+        say(galaxy::cloud90::clear_token() ? "TOKEN REMOVED" : "COULD NOT REMOVE THE TOKEN");
+        return true;
+    }
+    return true;  // ENTER does nothing else on this page (no draft to apply)
+}
+
 bool handle_native_settings_key(WPARAM key, bool was_down, bool from_pad = false) {
     const std::lock_guard<std::recursive_mutex> lock(s_native_settings_mutex);
     if (!native_settings_ui_enabled()) {
@@ -1292,6 +1331,10 @@ bool handle_native_settings_key(WPARAM key, bool was_down, bool from_pad = false
     }
     if (key == galaxy::host::kBindingCaptureKey && !s_native_settings_visible.load(std::memory_order_relaxed)) {
         (void)galaxy::host::take_controller_binding_capture();
+        return true;
+    }
+    if (key != VK_F1 && s_native_settings_visible.load(std::memory_order_relaxed) &&
+        handle_cloud90_key(key, was_down)) {
         return true;
     }
     if (key != VK_F1 && s_native_settings_visible.load(std::memory_order_relaxed) &&
@@ -9524,6 +9567,15 @@ std::string native_settings_row_text(
         }
         if (row == 1u) return std::string("LANGUAGE: ") + game_language_name(runtime.language);
         return {};
+    case 5:
+        switch (row) {
+        case 0: return std::string("STATUS: ") + galaxy::cloud90::link_ui_status();
+        case 1: return std::string("TOKEN: ") + galaxy::cloud90::token_hint();
+        case 2: return "PASTE TOKEN FROM CLIPBOARD: ENTER";
+        case 3: return std::string("RECEIVE EFFECTS: ") + (galaxy::cloud90::paused() ? "OFF" : "ON");
+        case 4: return "REMOVE TOKEN: ENTER";
+        default: return {};
+        }
     default:
         return {};
     }
@@ -9597,12 +9649,12 @@ void draw_native_settings_overlay(RendererD3D12& renderer) {
         "SETTINGS",
         text);
 
-    const char* tabs[] = {"DISPLAY", "GRAPHICS", "CONTROLS", "AUDIO", "GENERAL"};
+    const char* tabs[] = {"DISPLAY", "GRAPHICS", "CONTROLS", "AUDIO", "GENERAL", "CLOUD90"};
     static_assert(std::size(tabs) == kNativeSettingsTabCount);
     int tab_x = panel_x + 28;
-    // Five labels share the panel width; the longest is eight 6-unit glyphs
+    // The labels share the panel width; the longest is eight 6-unit glyphs
     // plus a gap, so the label scale shrinks on narrow panels.
-    const int tab_step = (panel_w - 56) / 5;
+    const int tab_step = (panel_w - 56) / static_cast<int>(kNativeSettingsTabCount);
     const int tab_scale = std::clamp(tab_step / 54, 1, scale);
     for (unsigned i = 0; i < kNativeSettingsTabCount; ++i) {
         ui_text(
