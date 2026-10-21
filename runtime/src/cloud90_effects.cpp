@@ -27,6 +27,7 @@ std::mutex g_mutex;
 std::vector<Pending> g_pending;   // guarded by g_mutex
 bool g_panic_requested = false;   // guarded by g_mutex
 std::atomic<bool> g_paused{false};
+std::atomic<bool> g_in_play{true};
 
 // Input thread only (plus remaining_vi, read on the same thread or in tests).
 std::array<std::uint64_t, kEffectCount> g_until{};  // VI an effect ends at
@@ -103,6 +104,7 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
     }
     g_last_vi = vi;
     g_has_last_vi = true;
+    g_in_play.store(in_play, std::memory_order_relaxed);
     try {
         take_pending(vi);
     } catch (...) {
@@ -134,6 +136,18 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
         snapshot.accel.x = (vi & 1u) ? 0x3f0u : 0x010u;
     }
 }
+
+std::optional<Effect> effect_from_name(std::string_view name) noexcept {
+    if (name == "invert_controls") return Effect::InvertControls;
+    if (name == "auto_jump") return Effect::AutoJump;
+    if (name == "no_jump") return Effect::NoJump;
+    if (name == "drunk_stick") return Effect::DrunkStick;
+    if (name == "force_spin") return Effect::ForceSpin;
+    if (name == "auto_run") return Effect::AutoRun;
+    return std::nullopt;
+}
+
+bool in_play() noexcept { return g_in_play.load(std::memory_order_relaxed); }
 
 std::uint64_t remaining_vi(Effect effect, std::uint64_t vi) noexcept {
     if (effect >= Effect::Count) return 0;

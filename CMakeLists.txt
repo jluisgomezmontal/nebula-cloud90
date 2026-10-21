@@ -467,6 +467,7 @@ target_link_libraries(
 
 add_library(galaxy_native_input STATIC
     runtime/src/cloud90_effects.cpp
+    runtime/src/cloud90_link.cpp
     runtime/src/native_input.cpp
     runtime/src/pointer_control.cpp
     runtime/src/rumble.cpp
@@ -969,6 +970,8 @@ target_link_libraries(galaxy_native_input_tests PRIVATE galaxy_native_input)
 # Cloud90 Game Link (PLAN-GAME-LINK.md).
 add_executable(galaxy_cloud90_effects_tests runtime/src/cloud90_effects_tests.cpp)
 target_link_libraries(galaxy_cloud90_effects_tests PRIVATE galaxy_native_input)
+add_executable(galaxy_cloud90_link_tests runtime/src/cloud90_link_tests.cpp)
+target_link_libraries(galaxy_cloud90_link_tests PRIVATE galaxy_native_input)
 
 add_executable(galaxy_layout_aspect_tests runtime/src/layout_aspect_tests.cpp)
 target_link_libraries(galaxy_layout_aspect_tests PRIVATE galaxy_runtime_abi)
@@ -1223,6 +1226,7 @@ galaxy_add_native_test(
     galaxy_host_pointer_events_tests)
 galaxy_add_native_test(native_input_reports galaxy_native_input_tests)
 galaxy_add_native_test(cloud90_effects galaxy_cloud90_effects_tests)
+galaxy_add_native_test(cloud90_link galaxy_cloud90_link_tests)
 galaxy_add_native_test(layout_aspect_geometry galaxy_layout_aspect_tests)
 galaxy_add_native_test(diagnostic_stick_lease galaxy_diagnostic_stick_lease_tests)
 galaxy_add_native_test(simulation_cache_affinity galaxy_simulation_cache_affinity_tests)

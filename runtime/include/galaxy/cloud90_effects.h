@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+#include <string_view>
 
 namespace galaxy::input {
 struct WiimoteInputSnapshot;
@@ -45,6 +47,13 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
 // Remaining VIs of an effect (0 = off), for the settings page and tests.
 [[nodiscard]] std::uint64_t remaining_vi(Effect effect,
                                          std::uint64_t current_vi) noexcept;
+
+// The id Cloud90 sends ("invert_controls"…) → the effect, if known.
+[[nodiscard]] std::optional<Effect> effect_from_name(std::string_view name) noexcept;
+
+// Whether the last report was during play (not a menu), for the link to
+// tell Cloud90 to hold effects.
+[[nodiscard]] bool in_play() noexcept;
 
 // Tests only: forget all state.
 void reset_for_tests() noexcept;

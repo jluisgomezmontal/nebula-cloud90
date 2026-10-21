@@ -1,4 +1,5 @@
 #include "galaxy/native_api.h"
+#include "galaxy/cloud90_link.h"
 #include "galaxy/crash_notes.h"
 #include "nebula_build_identity.h"
 #include "galaxy/ai_dma_timing.h"
@@ -32575,6 +32576,8 @@ int wmain(int argc, wchar_t** argv) {
         }
         return 10;
     }
+    // Cloud90 Game Link: connect to Cloud90 if a token is set up.
+    galaxy::cloud90::start_link();
     if (trace_boot_log_enabled()) {
         std::wcout << L"[boot] Game data: " << game_pak_dir.c_str() << L'\n'
                    << L"[boot] Native module: " << module_path.c_str()
