@@ -186,6 +186,13 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
     }
 }
 
+void apply_pointer_effects(float& x, float& y, std::uint64_t vi) noexcept {
+    if (!g_in_play.load(std::memory_order_relaxed) || !active(Effect::DrunkPointer, vi)) return;
+    const double t = static_cast<double>(vi) / 60.0;
+    x = std::clamp(x + static_cast<float>(std::sin(t * 1.3) * 0.35 + std::sin(t * 9.0) * 0.05), -1.0f, 1.0f);
+    y = std::clamp(y + static_cast<float>(std::cos(t * 1.1) * 0.30 + std::cos(t * 8.0) * 0.05), -1.0f, 1.0f);
+}
+
 std::optional<Effect> effect_from_name(std::string_view name) noexcept {
     if (name == "invert_controls") return Effect::InvertControls;
     if (name == "auto_jump") return Effect::AutoJump;

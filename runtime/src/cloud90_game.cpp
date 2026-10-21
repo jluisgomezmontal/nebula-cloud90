@@ -27,6 +27,7 @@ std::atomic<std::int32_t> g_star_bits{0};
 std::atomic<std::int32_t> g_coins{0};
 // Panic from another thread: the game thread ends a running shake.
 std::atomic<bool> g_clear_requested{false};
+std::atomic<bool> g_rainbow_ready{false};
 
 // Game thread only.
 std::uint64_t g_shake_until_ms = 0;
@@ -55,7 +56,7 @@ bool useful(GameAction action, std::uint32_t health, std::uint32_t max_health, s
     case GameAction::CoinsRemove: return coins > 0;
     case GameAction::CoinRain: return true;
     case GameAction::LifeMushroom: return max_health <= 3;
-    case GameAction::Rainbow: return true;
+    case GameAction::Rainbow: return g_rainbow_ready.load(std::memory_order_relaxed);
     case GameAction::CameraShake: return true;
     case GameAction::Count: break;
     }
@@ -106,6 +107,7 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
     std::int32_t star_bits = player.star_bits();
     std::int32_t coins = player.coins();
     if (g_clear_requested.exchange(false, std::memory_order_relaxed)) g_shake_until_ms = 0;
+    g_rainbow_ready.store(player.rainbow_ready(), std::memory_order_relaxed);
 
     std::optional<GameAction> next;
     if (!paused() && (!g_has_last_action || now_ms - g_last_action_ms >= kGameActionSpacingMs)) {
@@ -189,6 +191,7 @@ void reset_game_for_tests() noexcept {
     g_last_action_ms = 0;
     g_shake_until_ms = 0;
     g_last_shake_ms = 0;
+    g_rainbow_ready.store(false);
 }
 
 }  // namespace galaxy::cloud90

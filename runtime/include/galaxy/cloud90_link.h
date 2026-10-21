@@ -23,6 +23,9 @@ void start_link() noexcept;
 // "connected", "connecting…", "sin token", the server's reason for closing…
 [[nodiscard]] std::string link_status();
 
+// Any thread: one line in cloud90-link.log (what the game did, for support).
+void log_event(const std::string& line) noexcept;
+
 // The same for the F1 page: CONNECTED, CONNECTING, NO TOKEN, TOKEN REJECTED,
 // NO ACCESS, UPDATE THE GAME, OFFLINE - RETRYING.
 [[nodiscard]] std::string link_ui_status();

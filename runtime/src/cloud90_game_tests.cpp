@@ -37,6 +37,8 @@ public:
         if (status == galaxy::cloud90::kItemLifeUp) max_hp = 6;
     }
     void shake_camera() override { ++shakes; }
+    bool rainbow = false;
+    bool rainbow_ready() override { return rainbow; }
 };
 
 void reset() {
@@ -142,6 +144,15 @@ bool test_batch_two() {
     galaxy::cloud90::on_player_frame(p, 5600);
     ok &= expect(p.shakes == before, "panic ends a shake");
     ok &= expect(galaxy::cloud90::game_action_from_name("rainbow_star") == GameAction::Rainbow, "name");
+    galaxy::cloud90::request_game_action(GameAction::Rainbow, 6000);
+    galaxy::cloud90::on_player_frame(p, 6000);
+    ok &= expect(p.item != galaxy::cloud90::kItemRainbowStar, "no rainbow without its models");
+    ok &= expect(!galaxy::cloud90::game_action_applicable(GameAction::Rainbow, 6010), "refused");
+    p.rainbow = true;
+    galaxy::cloud90::on_player_frame(p, 6400);
+    galaxy::cloud90::request_game_action(GameAction::Rainbow, 6400);
+    galaxy::cloud90::on_player_frame(p, 6800);
+    ok &= expect(p.item == galaxy::cloud90::kItemRainbowStar, "rainbow where the galaxy has it");
     return ok;
 }
 

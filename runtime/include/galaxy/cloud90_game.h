@@ -61,6 +61,9 @@ public:
     // 10 Life Up mushroom).
     virtual void item_status(std::int32_t status) = 0;
     virtual void shake_camera() = 0;
+    // The Rainbow Star needs Mario's rainbow hand models, which only galaxies
+    // with that item load (without them the game crashes).
+    virtual bool rainbow_ready() = 0;
 };
 
 inline constexpr std::int32_t kItemRainbowStar = 7;

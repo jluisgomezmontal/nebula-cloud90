@@ -59,6 +59,10 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
                          std::uint64_t current_vi,
                          bool in_play) noexcept;
 
+// Input thread, right after apply_input_effects: the pointer as the game's
+// KPAD reads it with a mouse ([-1, 1], from the host, not the IR dots).
+void apply_pointer_effects(float& x, float& y, std::uint64_t current_vi) noexcept;
+
 // Remaining VIs of an effect (0 = off), for the settings page and tests.
 [[nodiscard]] std::uint64_t remaining_vi(Effect effect,
                                          std::uint64_t current_vi) noexcept;

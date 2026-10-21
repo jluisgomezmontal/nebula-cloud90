@@ -54,13 +54,7 @@ std::filesystem::path data_dir() {
 
 std::filesystem::path config_path() { return data_dir() / L"cloud90-link.ini"; }
 
-// `line` for the log, `ui` for the F1 page (its font: capitals, no accents).
-void set_status(const std::string& line, const std::string& ui) {
-    {
-        const std::lock_guard<std::mutex> lock(g_status_mutex);
-        g_status = line;
-        g_ui_status = ui;
-    }
+void write_log(const std::string& line) {
     std::fprintf(stderr, "[cloud90] %s\n", line.c_str());
     try {
         std::ofstream out(data_dir() / L"cloud90-link.log", std::ios::app);
@@ -71,6 +65,16 @@ void set_status(const std::string& line, const std::string& ui) {
         out << stamp << line << '\n';
     } catch (...) {
     }
+}
+
+// `line` for the log, `ui` for the F1 page (its font: capitals, no accents).
+void set_status(const std::string& line, const std::string& ui) {
+    {
+        const std::lock_guard<std::mutex> lock(g_status_mutex);
+        g_status = line;
+        g_ui_status = ui;
+    }
+    write_log(line);
 }
 
 std::string trim(std::string s) {
@@ -434,6 +438,13 @@ void start_link() noexcept {
         std::thread(link_thread).detach();
     } catch (...) {
         set_status("no se pudo iniciar la conexión con Cloud90", "ERROR");
+    }
+}
+
+void log_event(const std::string& line) noexcept {
+    try {
+        write_log(line);
+    } catch (...) {
     }
 }
 

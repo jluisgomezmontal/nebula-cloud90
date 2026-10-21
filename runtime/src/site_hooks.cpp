@@ -1,6 +1,7 @@
 #include "galaxy/site_hooks.h"
 
 #include "galaxy/cloud90_game.h"
+#include "galaxy/cloud90_link.h"
 #include "galaxy/experimental_ultrawide_aspect.h"
 #include "galaxy/layout_aspect.h"
 #include "galaxy/layout_aspect_cinema.h"
@@ -157,13 +158,26 @@ public:
     // more at any time) and popped out around him (MR::appearCoinCircle at
     // his LiveActor::mPosition, +0x0C), with the game's coin sound.
     void coin_rain(std::int32_t count) override {
+        // MR::getDeclareRemnantCoinCount before and after, and what
+        // appearCoinCircle answered, go to the link log (to diagnose).
+        const std::uint32_t before = call(0x803F09C4u, actor_);
         call(0x803F0974u, actor_, static_cast<std::uint32_t>(count));
-        call(0x803F0B84u, actor_, actor_ + 0x0Cu, static_cast<std::uint32_t>(count));
+        const std::uint32_t declared = call(0x803F09C4u, actor_);
+        const std::uint32_t appeared = call(0x803F0B84u, actor_, actor_ + 0x0Cu, static_cast<std::uint32_t>(count));
+        cloud90::log_event("coin_rain: remnant " + std::to_string(before) + " -> " + std::to_string(declared) +
+                           ", appeared=" + std::to_string(appeared & 0xFFu));
     }
     // MR::changePlayerItemStatus -> MarioAccess::changeItemStatus.
     void item_status(std::int32_t status) override { call(0x803F2868u, static_cast<std::uint32_t>(status)); }
     // MR::shakeCameraVeryStrong.
     void shake_camera() override { call(0x803F1384u, 0u); }
+    // What MarioActor::setPlayerMode(Invincible) touches first: +0x9C8 and
+    // the rainbow hands +0xA50/+0xA54 (garbage outside those galaxies).
+    bool rainbow_ready() override {
+        for (const std::uint32_t field : {0x9C8u, 0xA50u, 0xA54u})
+            if (!rmge01_guest_object(guest_load_u32(memory_, actor_ + field, services_, pc_))) return false;
+        return true;
+    }
 
 private:
     // MR::getGameSceneLayoutHolder() +0x34: the CounterLayoutController, or 0.
