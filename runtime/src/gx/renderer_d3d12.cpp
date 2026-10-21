@@ -2172,8 +2172,12 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Cloud90 Game Link: F8 tries an effect (inverted controls, 10 s) —
         // the streamer's own test, so it also lifts a pause. F9 is the panic
         // key: ends every effect and pauses the chat's; F9 again resumes.
-        if (!was_down && (wp == VK_F8 || wp == VK_F9)) {
-            if (wp == VK_F8) {
+        // F7 tries the spin effect (5 s) the same way.
+        if (!was_down && (wp == VK_F7 || wp == VK_F8 || wp == VK_F9)) {
+            if (wp == VK_F7) {
+                galaxy::cloud90::set_paused(false);
+                galaxy::cloud90::enqueue(galaxy::cloud90::Effect::ForceSpin, 5'000);
+            } else if (wp == VK_F8) {
                 galaxy::cloud90::set_paused(false);
                 galaxy::cloud90::enqueue(galaxy::cloud90::Effect::InvertControls, 10'000);
             } else if (galaxy::cloud90::paused()) {
