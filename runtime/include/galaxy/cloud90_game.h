@@ -21,11 +21,18 @@ enum class GameAction : std::uint8_t {
     StarBitsRemove,  // -kStarBitsStep, never below 0
     CoinsAdd,        // +kCoinsStep (heals and gives 1-ups as picked-up coins do)
     CoinsRemove,     // -kCoinsStep, never below 0
+    CoinRain,        // kCoinRainCount real coins pop out around Mario
+    LifeMushroom,    // the Life Up mushroom: 6 health instead of 3
+    Rainbow,         // the Rainbow Star: invincible for the game's own time
+    CameraShake,     // the game's strong camera shake, for kCameraShakeMs
     Count,
 };
 
 inline constexpr std::int32_t kStarBitsStep = 10;
 inline constexpr std::int32_t kCoinsStep = 10;
+inline constexpr std::int32_t kCoinRainCount = 10;
+inline constexpr std::uint64_t kCameraShakeMs = 3000u;
+inline constexpr std::uint64_t kCameraShakeEveryMs = 500u;
 // A queued action that can't run this long (Mario not controllable) is dropped.
 inline constexpr std::uint64_t kGameActionTimeoutMs = 10'000u;
 // Mario's update counts as "now" this long after it last ran.
@@ -49,7 +56,15 @@ public:
     virtual void add_lives(std::int32_t delta) = 0;
     virtual void add_star_bits(std::int32_t delta) = 0;
     virtual void add_coins(std::int32_t delta) = 0;
+    virtual void coin_rain(std::int32_t count) = 0;
+    // MR::changePlayerItemStatus: what the game's items do (7 Rainbow Star,
+    // 10 Life Up mushroom).
+    virtual void item_status(std::int32_t status) = 0;
+    virtual void shake_camera() = 0;
 };
+
+inline constexpr std::int32_t kItemRainbowStar = 7;
+inline constexpr std::int32_t kItemLifeUp = 10;
 
 // The id Cloud90 sends ("heal"…) → the action, if known.
 [[nodiscard]] std::optional<GameAction> game_action_from_name(std::string_view name) noexcept;

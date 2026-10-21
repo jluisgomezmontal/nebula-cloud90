@@ -153,6 +153,18 @@ public:
             guest_store_u32(memory_, coin_counter + 0x24u, static_cast<std::uint32_t>(coins()), services_, pc_);
     }
 
+    // Real coins: declared to Mario (MR::declareCoin; the shared pool takes
+    // more at any time) and popped out around him (MR::appearCoinCircle at
+    // his LiveActor::mPosition, +0x0C), with the game's coin sound.
+    void coin_rain(std::int32_t count) override {
+        call(0x803F0974u, actor_, static_cast<std::uint32_t>(count));
+        call(0x803F0B84u, actor_, actor_ + 0x0Cu, static_cast<std::uint32_t>(count));
+    }
+    // MR::changePlayerItemStatus -> MarioAccess::changeItemStatus.
+    void item_status(std::int32_t status) override { call(0x803F2868u, static_cast<std::uint32_t>(status)); }
+    // MR::shakeCameraVeryStrong.
+    void shake_camera() override { call(0x803F1384u, 0u); }
+
 private:
     // MR::getGameSceneLayoutHolder() +0x34: the CounterLayoutController, or 0.
     std::uint32_t layout_counters() {
@@ -162,12 +174,13 @@ private:
         return rmge01_guest_object(counters) ? counters : 0u;
     }
 
-    std::uint32_t call(std::uint32_t function, std::uint32_t r3, std::uint32_t r4 = 0u) {
+    std::uint32_t call(std::uint32_t function, std::uint32_t r3, std::uint32_t r4 = 0u, std::uint32_t r5 = 0u) {
         std::uint32_t gpr[32];
         std::copy(std::begin(context_->gpr), std::end(context_->gpr), gpr);
         const std::uint32_t cr = context_->cr, lr = context_->lr, ctr = context_->ctr, xer = context_->xer;
         context_->gpr[3] = r3;
         context_->gpr[4] = r4;
+        context_->gpr[5] = r5;
         services_->call_guest(services_->user, function, context_, memory_);
         const std::uint32_t result = context_->gpr[3];
         std::copy(std::begin(gpr), std::end(gpr), context_->gpr);

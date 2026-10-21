@@ -25,8 +25,12 @@ std::atomic<std::uint32_t> g_max_health{0};
 std::atomic<std::int32_t> g_lives{0};
 std::atomic<std::int32_t> g_star_bits{0};
 std::atomic<std::int32_t> g_coins{0};
+// Panic from another thread: the game thread ends a running shake.
+std::atomic<bool> g_clear_requested{false};
 
 // Game thread only.
+std::uint64_t g_shake_until_ms = 0;
+std::uint64_t g_last_shake_ms = 0;
 std::uint64_t g_last_action_ms = 0;
 bool g_has_last_action = false;
 
@@ -49,6 +53,10 @@ bool useful(GameAction action, std::uint32_t health, std::uint32_t max_health, s
     case GameAction::StarBitsRemove: return star_bits > 0;
     case GameAction::CoinsAdd: return coins < 999;
     case GameAction::CoinsRemove: return coins > 0;
+    case GameAction::CoinRain: return true;
+    case GameAction::LifeMushroom: return max_health <= 3;
+    case GameAction::Rainbow: return true;
+    case GameAction::CameraShake: return true;
     case GameAction::Count: break;
     }
     return false;
@@ -65,6 +73,10 @@ std::optional<GameAction> game_action_from_name(std::string_view name) noexcept 
     if (name == "starbits_remove") return GameAction::StarBitsRemove;
     if (name == "coins_add") return GameAction::CoinsAdd;
     if (name == "coins_remove") return GameAction::CoinsRemove;
+    if (name == "coin_rain") return GameAction::CoinRain;
+    if (name == "life_mushroom") return GameAction::LifeMushroom;
+    if (name == "rainbow_star") return GameAction::Rainbow;
+    if (name == "camera_shake") return GameAction::CameraShake;
     return std::nullopt;
 }
 
@@ -93,6 +105,7 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
     std::int32_t lives = player.lives();
     std::int32_t star_bits = player.star_bits();
     std::int32_t coins = player.coins();
+    if (g_clear_requested.exchange(false, std::memory_order_relaxed)) g_shake_until_ms = 0;
 
     std::optional<GameAction> next;
     if (!paused() && (!g_has_last_action || now_ms - g_last_action_ms >= kGameActionSpacingMs)) {
@@ -120,11 +133,19 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
             break;
         case GameAction::CoinsAdd: player.add_coins(kCoinsStep); break;
         case GameAction::CoinsRemove: player.add_coins(-(coins < kCoinsStep ? coins : kCoinsStep)); break;
+        case GameAction::CoinRain: player.coin_rain(kCoinRainCount); break;
+        case GameAction::LifeMushroom: player.item_status(kItemLifeUp); break;
+        case GameAction::Rainbow: player.item_status(kItemRainbowStar); break;
+        case GameAction::CameraShake:
+            g_shake_until_ms = now_ms + kCameraShakeMs;
+            g_last_shake_ms = 0;
+            break;
         case GameAction::Count: break;
         }
         g_last_action_ms = now_ms;
         g_has_last_action = true;
         health = player.health();
+        max_health = player.max_health();
         lives = player.lives();
         star_bits = player.star_bits();
         coins = player.coins();
@@ -133,6 +154,13 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
     g_health.store(health, std::memory_order_relaxed);
     g_max_health.store(max_health, std::memory_order_relaxed);
     g_lives.store(lives, std::memory_order_relaxed);
+    // A shake lasts a fraction of a second: repeated while the effect runs.
+    if (now_ms < g_shake_until_ms && !paused() &&
+        (g_last_shake_ms == 0 || now_ms - g_last_shake_ms >= kCameraShakeEveryMs)) {
+        player.shake_camera();
+        g_last_shake_ms = now_ms;
+    }
+
     g_star_bits.store(star_bits, std::memory_order_relaxed);
     g_coins.store(coins, std::memory_order_relaxed);
     g_last_frame_ms.store(now_ms, std::memory_order_release);
@@ -145,6 +173,7 @@ void clear_game_actions() noexcept {
         g_queue.clear();
     } catch (...) {
     }
+    g_clear_requested.store(true, std::memory_order_relaxed);
 }
 
 void reset_game_for_tests() noexcept {
@@ -158,6 +187,8 @@ void reset_game_for_tests() noexcept {
     g_coins.store(0);
     g_has_last_action = false;
     g_last_action_ms = 0;
+    g_shake_until_ms = 0;
+    g_last_shake_ms = 0;
 }
 
 }  // namespace galaxy::cloud90

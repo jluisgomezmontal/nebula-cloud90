@@ -29,6 +29,14 @@ public:
     void add_lives(std::int32_t delta) override { ++calls; left += delta; }
     void add_star_bits(std::int32_t delta) override { ++calls; bits += delta; }
     void add_coins(std::int32_t delta) override { ++calls; money += delta; }
+    int rained = 0, item = -1, shakes = 0;
+    void coin_rain(std::int32_t count) override { ++calls; rained += count; }
+    void item_status(std::int32_t status) override {
+        ++calls;
+        item = status;
+        if (status == galaxy::cloud90::kItemLifeUp) max_hp = 6;
+    }
+    void shake_camera() override { ++shakes; }
 };
 
 void reset() {
@@ -112,6 +120,31 @@ bool test_coins() {
     return ok;
 }
 
+bool test_batch_two() {
+    reset();
+    FakePlayer p;
+    galaxy::cloud90::request_game_action(GameAction::CoinRain, 0);
+    galaxy::cloud90::on_player_frame(p, 0);
+    bool ok = expect(p.rained == galaxy::cloud90::kCoinRainCount, "coin rain");
+    galaxy::cloud90::request_game_action(GameAction::LifeMushroom, 0);
+    galaxy::cloud90::on_player_frame(p, 300);
+    ok &= expect(p.item == galaxy::cloud90::kItemLifeUp && p.max_hp == 6, "life mushroom");
+    ok &= expect(!galaxy::cloud90::game_action_applicable(GameAction::LifeMushroom, 310), "already 6");
+    galaxy::cloud90::request_game_action(GameAction::CameraShake, 310);
+    for (std::uint64_t t = 600; t <= 600 + galaxy::cloud90::kCameraShakeMs + 1000; t += 100)
+        galaxy::cloud90::on_player_frame(p, t);
+    ok &= expect(p.shakes == 6, "a shake every 500 ms for 3 s");
+    galaxy::cloud90::request_game_action(GameAction::CameraShake, 5000);
+    galaxy::cloud90::on_player_frame(p, 5000);
+    galaxy::cloud90::panic();
+    galaxy::cloud90::set_paused(false);
+    const int before = p.shakes;
+    galaxy::cloud90::on_player_frame(p, 5600);
+    ok &= expect(p.shakes == before, "panic ends a shake");
+    ok &= expect(galaxy::cloud90::game_action_from_name("rainbow_star") == GameAction::Rainbow, "name");
+    return ok;
+}
+
 bool test_heal_only_when_hurt() {
     reset();
     FakePlayer p;
@@ -164,6 +197,7 @@ int main() {
     ok &= test_star_bits_never_negative();
     ok &= test_heal_only_when_hurt();
     ok &= test_coins();
+    ok &= test_batch_two();
     ok &= test_old_requests_expire();
     ok &= test_panic_clears_and_pause_refuses();
     ok &= test_queue_is_bounded();
