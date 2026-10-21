@@ -141,6 +141,18 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
         stick.stick_x = clamp_axis(2 * kStickCenterX - stick.stick_x);
         stick.stick_y = clamp_axis(2 * kStickCenterY - stick.stick_y);
     }
+    if (active(Effect::Crouch, vi)) snapshot.nunchuk.z = true;
+    if (active(Effect::DrunkPointer, vi)) {
+        // The same shift for every IR dot, so the pointer moves (not turns).
+        const double t = static_cast<double>(vi) / 60.0;
+        const int dx = static_cast<int>(std::lround(std::sin(t * 1.3) * 180.0 + std::sin(t * 9.0) * 25.0));
+        const int dy = static_cast<int>(std::lround(std::cos(t * 1.1) * 130.0 + std::cos(t * 8.0) * 25.0));
+        for (auto& dot : snapshot.ir) {
+            if (!dot.visible) continue;
+            dot.x = static_cast<std::uint16_t>(std::clamp(static_cast<int>(dot.x) + dx, 0, 1023));
+            dot.y = static_cast<std::uint16_t>(std::clamp(static_cast<int>(dot.y) + dy, 0, 767));
+        }
+    }
     if (active(Effect::NoJump, vi)) {
         snapshot.buttons.a = false;
     } else if (active(Effect::AutoJump, vi)) {
@@ -157,6 +169,21 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
     if (!spinning) g_spin_reports = 0;
     (void)galaxy::input::advance_wiimote_shake_accel(
         snapshot, press, g_spin_previous_press, g_spin_frames_left);
+    // Last, over everything above: only pause and the HOME menu get through.
+    if (active(Effect::Paralyze, vi)) {
+        const galaxy::input::WiimoteButtons keep = snapshot.buttons;
+        snapshot.buttons = {};
+        snapshot.buttons.plus = keep.plus;
+        snapshot.buttons.minus = keep.minus;
+        snapshot.buttons.home = keep.home;
+        snapshot.accel = {galaxy::input::kWiimoteRestAccelX, galaxy::input::kWiimoteRestAccelY,
+                          galaxy::input::kWiimoteRestAccelZ};
+        snapshot.nunchuk.stick_x = static_cast<std::uint8_t>(kStickCenterX);
+        snapshot.nunchuk.stick_y = static_cast<std::uint8_t>(kStickCenterY);
+        snapshot.nunchuk.c = false;
+        snapshot.nunchuk.z = false;
+        snapshot.nunchuk.accel = {};
+    }
 }
 
 std::optional<Effect> effect_from_name(std::string_view name) noexcept {
@@ -166,6 +193,9 @@ std::optional<Effect> effect_from_name(std::string_view name) noexcept {
     if (name == "drunk_stick") return Effect::DrunkStick;
     if (name == "force_spin") return Effect::ForceSpin;
     if (name == "auto_run") return Effect::AutoRun;
+    if (name == "paralyze") return Effect::Paralyze;
+    if (name == "crouch") return Effect::Crouch;
+    if (name == "drunk_pointer") return Effect::DrunkPointer;
     if (name == "flip_screen") return Effect::FlipScreen;
     if (name == "mirror_screen") return Effect::MirrorScreen;
     if (name == "grayscale") return Effect::Grayscale;
@@ -173,6 +203,10 @@ std::optional<Effect> effect_from_name(std::string_view name) noexcept {
     if (name == "wobble_screen") return Effect::WobbleScreen;
     if (name == "invert_colors") return Effect::InvertColors;
     if (name == "tunnel_vision") return Effect::TunnelVision;
+    if (name == "earthquake") return Effect::Earthquake;
+    if (name == "gameboy") return Effect::GameBoy;
+    if (name == "fisheye") return Effect::Fisheye;
+    if (name == "blur") return Effect::Blur;
     return std::nullopt;
 }
 

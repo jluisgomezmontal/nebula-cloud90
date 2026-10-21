@@ -2213,8 +2213,8 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             s_handled_key_normalized = galaxy::input::normalize_native_window_key(
                 raw, shift, (static_cast<UINT>(lp) & (1u << 24u)) != 0u);
         }
-        // Cloud90 Game Link: F8 tries an effect (inverted controls, 10 s) —
-        // the streamer's own test, so it also lifts a pause. F9 is the panic
+        // Cloud90 Game Link: F8 tries the next control effect (8 s) each
+        // press — the streamer's own test, so it also lifts a pause. F9 is the panic
         // key: ends every effect and pauses the chat's; F9 again resumes.
         // F7 tries the spin effect (5 s) the same way; F6 the next screen
         // effect each press (8 s). F5 the next change to the game itself
@@ -2241,8 +2241,12 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 galaxy::cloud90::set_paused(false);
                 galaxy::cloud90::enqueue(galaxy::cloud90::Effect::ForceSpin, 5'000);
             } else if (wp == VK_F8) {
+                // The next control effect each press (8 s), inverted first.
+                static int s_next_control = 0;
+                constexpr int kCount = static_cast<int>(galaxy::cloud90::Effect::FlipScreen);
                 galaxy::cloud90::set_paused(false);
-                galaxy::cloud90::enqueue(galaxy::cloud90::Effect::InvertControls, 10'000);
+                galaxy::cloud90::enqueue(static_cast<galaxy::cloud90::Effect>(s_next_control), 8'000);
+                s_next_control = (s_next_control + 1) % kCount;
             } else if (galaxy::cloud90::paused()) {
                 galaxy::cloud90::set_paused(false);
             } else {

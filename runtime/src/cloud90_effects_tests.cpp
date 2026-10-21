@@ -124,8 +124,53 @@ bool test_spin_is_not_applicable_in_the_prologue() {
 
 }  // namespace
 
+bool test_paralyze_keeps_only_pause() {
+    galaxy::cloud90::reset_for_tests();
+    galaxy::cloud90::enqueue(Effect::Paralyze, 1000);
+    galaxy::cloud90::enqueue(Effect::AutoJump, 1000);
+    auto s = stick(0x7b + 60, 0x81 + 60);
+    s.buttons.a = true;
+    s.buttons.b = true;
+    s.buttons.plus = true;
+    s.nunchuk.z = true;
+    galaxy::cloud90::apply_input_effects(s, 100, true);
+    bool ok = expect(!s.buttons.a && !s.buttons.b && !s.nunchuk.z, "buttons dropped, auto jump too");
+    ok &= expect(s.buttons.plus, "pause still works");
+    ok &= expect(s.nunchuk.stick_x == 0x7b && s.nunchuk.stick_y == 0x81, "stick centered");
+    return ok;
+}
+
+bool test_crouch_and_drunk_pointer() {
+    galaxy::cloud90::reset_for_tests();
+    galaxy::cloud90::enqueue(Effect::Crouch, 1000);
+    galaxy::cloud90::enqueue(Effect::DrunkPointer, 1000);
+    auto s = stick(0x7b, 0x81);
+    s.ir[0] = {true, 500, 380, 2};
+    s.ir[1] = {true, 600, 380, 2};
+    galaxy::cloud90::apply_input_effects(s, 100, true);
+    bool ok = expect(s.nunchuk.z, "Z held");
+    ok &= expect(s.ir[1].x - s.ir[0].x == 100 && (s.ir[0].x != 500 || s.ir[0].y != 380),
+                 "both dots moved together");
+    ok &= expect(!s.ir[2].visible, "hidden dots left alone");
+    return ok;
+}
+
+bool test_new_screen_effects_have_their_bits() {
+    galaxy::cloud90::reset_for_tests();
+    galaxy::cloud90::enqueue(Effect::Blur, 1000);
+    auto s = stick(0x7b, 0x81);
+    galaxy::cloud90::apply_input_effects(s, 100, true);
+    bool ok = expect(galaxy::cloud90::screen_effect_flags() == 1024u, "blur is bit 1024 (shader)");
+    ok &= expect(galaxy::cloud90::effect_from_name("earthquake") == Effect::Earthquake, "earthquake");
+    ok &= expect(galaxy::cloud90::effect_from_name("paralyze") == Effect::Paralyze, "paralyze");
+    return ok;
+}
+
 int main() {
     bool ok = true;
+    ok &= test_paralyze_keeps_only_pause();
+    ok &= test_crouch_and_drunk_pointer();
+    ok &= test_new_screen_effects_have_their_bits();
     ok &= test_invert_mirrors_the_stick_while_active();
     ok &= test_menus_freeze_the_timer_and_the_report();
     ok &= test_no_jump_beats_auto_jump_and_panic_clears();

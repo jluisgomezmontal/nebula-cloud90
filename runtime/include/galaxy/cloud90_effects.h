@@ -22,6 +22,9 @@ enum class Effect : std::uint8_t {
     DrunkStick,      // the stick drifts in slow circles
     ForceSpin,       // Wii Remote shakes (spin)
     AutoRun,         // stick held forward
+    Paralyze,        // nothing but pause reaches the game: buttons, stick, shakes
+    Crouch,          // Z held (crouch; with a jump, a backflip or long jump)
+    DrunkPointer,    // the Wii Remote pointer drifts and shakes
     // Screen (post-process pass, phase 4): bits of screen_effect_flags().
     FlipScreen,      // upside down
     MirrorScreen,    // left-right mirror
@@ -30,6 +33,10 @@ enum class Effect : std::uint8_t {
     WobbleScreen,    // wavy "drunk" image
     InvertColors,    // negative
     TunnelVision,    // dark edges, small circle in the middle
+    Earthquake,      // the image shakes
+    GameBoy,         // four shades of green
+    Fisheye,         // bulging middle
+    Blur,            // out of focus
     Count,
 };
 

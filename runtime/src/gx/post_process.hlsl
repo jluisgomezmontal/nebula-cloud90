@@ -286,6 +286,14 @@ float4 PSMain(FullscreenOut i) : SV_Target {
     const uint flags = (uint)g_params.x;
     const float t = g_params.y;
     float2 uv = (float2(ViewportPixel(i.pos)) + 0.5) * g_rt_metrics.xy;
+    if (flags & 512u) {                                      // fisheye
+        const float2 d = uv - 0.5;
+        uv = 0.5 + d * (0.6 + 0.8 * dot(d, d));
+    }
+    if (flags & 128u) {                                      // earthquake
+        uv += float2(sin(t * 53.0) * 0.010 + sin(t * 31.0) * 0.006,
+                     cos(t * 47.0) * 0.010 + cos(t * 23.0) * 0.005);
+    }
     if (flags & 1u) uv.y = 1.0 - uv.y;                       // flip
     if (flags & 2u) uv.x = 1.0 - uv.x;                       // mirror
     if (flags & 16u) {                                       // wobble
@@ -298,10 +306,27 @@ float4 PSMain(FullscreenOut i) : SV_Target {
         blocky = true;
     }
     uv = saturate(uv);
-    float3 c = blocky ? inputTex.SampleLevel(PointSampler, uv, 0).rgb
-                     : inputTex.SampleLevel(LinearSampler, uv, 0).rgb;
+    float3 c;
+    if (blocky) {
+        c = inputTex.SampleLevel(PointSampler, uv, 0).rgb;
+    } else if (flags & 1024u) {                              // blur: 5x5 taps, 3 px apart
+        c = 0.0;
+        [unroll] for (int y = -2; y <= 2; ++y)
+            [unroll] for (int x = -2; x <= 2; ++x)
+                c += inputTex.SampleLevel(LinearSampler, saturate(uv + float2(x, y) * 3.0 * g_rt_metrics.xy), 0).rgb;
+        c /= 25.0;
+    } else {
+        c = inputTex.SampleLevel(LinearSampler, uv, 0).rgb;
+    }
     if (flags & 4u) c = dot(c, float3(0.299, 0.587, 0.114)); // grayscale
     if (flags & 32u) c = 1.0 - c;                            // invert colors
+    if (flags & 256u) {                                      // Game Boy: 4 greens
+        const float l = dot(c, float3(0.299, 0.587, 0.114));
+        c = l < 0.25 ? float3(0.06, 0.22, 0.06)
+          : l < 0.50 ? float3(0.19, 0.38, 0.19)
+          : l < 0.75 ? float3(0.55, 0.67, 0.06)
+                     : float3(0.61, 0.74, 0.06);
+    }
     if (flags & 64u) {                                       // tunnel vision
         float2 d = uv - 0.5;
         d.x *= g_rt_metrics.z * g_rt_metrics.y;              // round, not oval
