@@ -1,3 +1,18 @@
+# Nebula (Cloud90 Game Link fork)
+
+This is a fork of [Nebula](https://github.com/keepvaibin/nebula) 1.0.1 by Cloud90. It adds
+**Cloud90 Game Link**: events from a TikTok live (gifts, likes, follows, shares) change the game
+while you stream, such as inverted controls, screen effects, a super jump or extra lives. It
+connects to [Cloud90 Live](https://www.cloud90.dev) with a token from your Cloud90 account
+(F1 > CLOUD90 in game) and works only for accounts with Game Link access. The Cloud90 changes are
+in `runtime/src/cloud90_*.cpp`, the `Cloud90Player` site hook and `tools/cloud90/`. Like
+Nebula, it is GPL-3.0 and contains no Nintendo code or assets; you need your own copy of the
+game. [Download](https://github.com/jluisgomezmontal/nebula-cloud90/releases/latest)
+
+The rest of this file is Nebula's own.
+
+---
+
 # Nebula
 
 Nebula runs **Super Mario Galaxy** natively on Windows. It translates the game's PowerPC
