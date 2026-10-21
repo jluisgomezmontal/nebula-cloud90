@@ -16,17 +16,19 @@ bool expect(bool condition, const char* message) {
 class FakePlayer final : public galaxy::cloud90::PlayerAccess {
 public:
     std::uint32_t hp = 3, max_hp = 3;
-    std::int32_t left = 4, bits = 25;
+    std::int32_t left = 4, bits = 25, money = 5;
     int calls = 0;
 
     std::uint32_t health() override { return hp; }
     std::uint32_t max_health() override { return max_hp; }
     std::int32_t lives() override { return left; }
     std::int32_t star_bits() override { return bits; }
+    std::int32_t coins() override { return money; }
     void heal(std::uint32_t amount) override { ++calls; hp = std::min(hp + amount, max_hp); }
     void damage() override { ++calls; if (hp) --hp; }
     void add_lives(std::int32_t delta) override { ++calls; left += delta; }
     void add_star_bits(std::int32_t delta) override { ++calls; bits += delta; }
+    void add_coins(std::int32_t delta) override { ++calls; money += delta; }
 };
 
 void reset() {
@@ -93,6 +95,23 @@ bool test_star_bits_never_negative() {
     return expect(p.bits == 0, "takes only what there is");
 }
 
+bool test_coins() {
+    reset();
+    FakePlayer p;
+    galaxy::cloud90::request_game_action(GameAction::CoinsAdd, 0);
+    galaxy::cloud90::on_player_frame(p, 0);
+    bool ok = expect(p.money == 15, "+10 coins");
+    galaxy::cloud90::request_game_action(GameAction::CoinsRemove, 0);
+    galaxy::cloud90::on_player_frame(p, galaxy::cloud90::kGameActionSpacingMs);
+    galaxy::cloud90::request_game_action(GameAction::CoinsRemove, 0);
+    galaxy::cloud90::on_player_frame(p, 2 * galaxy::cloud90::kGameActionSpacingMs);
+    ok &= expect(p.money == 0, "never below 0");
+    ok &= expect(!galaxy::cloud90::game_action_applicable(GameAction::CoinsRemove, 2 * galaxy::cloud90::kGameActionSpacingMs),
+                 "nothing to take");
+    ok &= expect(galaxy::cloud90::game_action_from_name("coins_remove") == GameAction::CoinsRemove, "name");
+    return ok;
+}
+
 bool test_heal_only_when_hurt() {
     reset();
     FakePlayer p;
@@ -144,6 +163,7 @@ int main() {
     ok &= test_never_kills_nor_takes_the_last_life();
     ok &= test_star_bits_never_negative();
     ok &= test_heal_only_when_hurt();
+    ok &= test_coins();
     ok &= test_old_requests_expire();
     ok &= test_panic_clears_and_pause_refuses();
     ok &= test_queue_is_bounded();

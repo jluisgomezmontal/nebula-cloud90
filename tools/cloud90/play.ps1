@@ -39,4 +39,4 @@ $env:GALAXY_NATIVE_THP_VIDEO_DECODE = "1"
 $env:GALAXY_DUSK_DSP_HLE = "0"
 Start-Process -FilePath (Join-Path $app "NebulaRuntime.exe") -WorkingDirectory $app `
     -ArgumentList @("`"$content`"", "`"$(Join-Path $app 'RMGE01_game.dll')`"")
-"Juego iniciado. F5 = cambio al juego (curar, golpe, 1-UP, quitar vida, star bits +/-), F6 = efecto de pantalla, F7 = giro, F8 = controles invertidos, F9 = pánico."
+"Juego iniciado. F5 = cambio al juego (curar, golpe, 1-UP, quitar vida, star bits +/-, monedas +/-), F6 = efecto de pantalla, F7 = giro, F8 = controles invertidos, F9 = pánico."

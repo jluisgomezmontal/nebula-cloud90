@@ -19,10 +19,13 @@ enum class GameAction : std::uint8_t {
     LifeDown,        // -1 life, never below 1
     StarBitsAdd,     // +kStarBitsStep
     StarBitsRemove,  // -kStarBitsStep, never below 0
+    CoinsAdd,        // +kCoinsStep (heals and gives 1-ups as picked-up coins do)
+    CoinsRemove,     // -kCoinsStep, never below 0
     Count,
 };
 
 inline constexpr std::int32_t kStarBitsStep = 10;
+inline constexpr std::int32_t kCoinsStep = 10;
 // A queued action that can't run this long (Mario not controllable) is dropped.
 inline constexpr std::uint64_t kGameActionTimeoutMs = 10'000u;
 // Mario's update counts as "now" this long after it last ran.
@@ -40,10 +43,12 @@ public:
     virtual std::uint32_t max_health() = 0;
     virtual std::int32_t lives() = 0;
     virtual std::int32_t star_bits() = 0;
+    virtual std::int32_t coins() = 0;
     virtual void heal(std::uint32_t amount) = 0;
     virtual void damage() = 0;
     virtual void add_lives(std::int32_t delta) = 0;
     virtual void add_star_bits(std::int32_t delta) = 0;
+    virtual void add_coins(std::int32_t delta) = 0;
 };
 
 // The id Cloud90 sends ("heal"…) → the action, if known.

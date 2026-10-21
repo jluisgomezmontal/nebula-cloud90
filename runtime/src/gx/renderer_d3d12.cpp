@@ -2218,7 +2218,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // key: ends every effect and pauses the chat's; F9 again resumes.
         // F7 tries the spin effect (5 s) the same way; F6 the next screen
         // effect each press (8 s). F5 the next change to the game itself
-        // (heal, damage, 1-up, life down, star bits +/-) each press.
+        // (heal, damage, 1-up, life down, star bits +/-, coins +/-) each press.
         if (!was_down && (wp == VK_F5 || wp == VK_F6 || wp == VK_F7 || wp == VK_F8 || wp == VK_F9)) {
             if (wp == VK_F5) {
                 static int s_next_action = 0;

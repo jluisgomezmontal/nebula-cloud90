@@ -121,18 +121,47 @@ public:
         }
         if (delta >= 0) return;
         call(0x803B021Cu, static_cast<std::uint32_t>(delta));
-        const std::uint32_t holder = call(0x80361738u, 0u);
-        if (!rmge01_guest_object(holder)) return;
-        const std::uint32_t counters = guest_load_u32(memory_, holder + 0x34u, services_, pc_);
-        if (!rmge01_guest_object(counters)) return;
+        const std::uint32_t counters = layout_counters();
+        if (!counters) return;
         const std::uint32_t player_left = guest_load_u32(memory_, counters + 0x30u, services_, pc_);
         if (!rmge01_guest_object(player_left)) return;
         guest_store_u32(memory_, player_left + 0x20u, static_cast<std::uint32_t>(lives()), services_, pc_);
     }
     // MR::addStarPiece, as picking one up does (same two places).
     void add_star_bits(std::int32_t delta) override { call(0x803CC52Cu, static_cast<std::uint32_t>(delta)); }
+    // MR::getCoinNum (the scene's ScenePlayingResult).
+    std::int32_t coins() override { return static_cast<std::int32_t>(call(0x803F670Cu, 0u)); }
+    // Coins given: MR::incCoin, as picking them up (each heals one point,
+    // every 50 a 1-up). Taken: ScenePlayingResult::incCoin straight (scene
+    // object 0x24), since MR::incCoin would heal by the negative count; and
+    // the counter on screen, which only counts up, shows the new number
+    // (GameSceneLayoutHolder +0x34, CounterLayoutController +0x28
+    // CoinCounter, +0x24 the number shown).
+    void add_coins(std::int32_t delta) override {
+        if (delta > 0) {
+            call(0x803F669Cu, static_cast<std::uint32_t>(delta));
+            return;
+        }
+        if (delta == 0 || (call(0x80344AB4u, 0x24u) & 0xFFu) == 0u) return;
+        const std::uint32_t result = call(0x80344A54u, call(0x80344AA8u, 0u), 0x24u);
+        if (!rmge01_guest_object(result)) return;
+        call(0x80345858u, result, static_cast<std::uint32_t>(delta));
+        const std::uint32_t counters = layout_counters();
+        if (!counters) return;
+        const std::uint32_t coin_counter = guest_load_u32(memory_, counters + 0x28u, services_, pc_);
+        if (rmge01_guest_object(coin_counter))
+            guest_store_u32(memory_, coin_counter + 0x24u, static_cast<std::uint32_t>(coins()), services_, pc_);
+    }
 
 private:
+    // MR::getGameSceneLayoutHolder() +0x34: the CounterLayoutController, or 0.
+    std::uint32_t layout_counters() {
+        const std::uint32_t holder = call(0x80361738u, 0u);
+        if (!rmge01_guest_object(holder)) return 0u;
+        const std::uint32_t counters = guest_load_u32(memory_, holder + 0x34u, services_, pc_);
+        return rmge01_guest_object(counters) ? counters : 0u;
+    }
+
     std::uint32_t call(std::uint32_t function, std::uint32_t r3, std::uint32_t r4 = 0u) {
         std::uint32_t gpr[32];
         std::copy(std::begin(context_->gpr), std::end(context_->gpr), gpr);
