@@ -31,6 +31,8 @@ namespace {
 constexpr const wchar_t* kDefaultServer = L"https://backcloud90devstreamkit.onrender.com";
 constexpr const wchar_t* kPath = L"/api/game-link/ws";
 constexpr auto kPingEvery = std::chrono::seconds(20);
+// A connection that lasted this long counts as working: the retry waits start over.
+constexpr auto kStableConnection = std::chrono::seconds(30);
 // DPAPI entropy: the token file only opens for this Windows user and this
 // purpose (tools\cloud90\set-token.ps1 uses the same).
 constexpr char kEntropy[] = "Cloud90GameLink";
@@ -367,7 +369,7 @@ void link_thread() {
         std::string error;
         USHORT code = 0;
         if (conn.open(cfg, error)) {
-            backoff = std::chrono::seconds(2);
+            const auto opened_at = std::chrono::steady_clock::now();
             {
                 const std::lock_guard<std::mutex> lock(g_current_mutex);
                 g_current = &conn;
@@ -402,6 +404,11 @@ void link_thread() {
                 g_current = nullptr;
             }
             error = reason.empty() ? "conexión perdida" : reason;
+            // Only a connection that held starts the waits over: one dropped
+            // at once (a server restarting, a deploy) keeps backing off, or
+            // the retries would hit the server's per-minute limit (429).
+            if (std::chrono::steady_clock::now() - opened_at >= kStableConnection)
+                backoff = std::chrono::seconds(2);
             // Refused for good (bad token, no access, old version): wait long.
             if (code == 4401 || code == 4403 || code == 4426 || code == 4400) backoff = std::chrono::seconds(60);
         }
