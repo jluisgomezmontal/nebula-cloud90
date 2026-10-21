@@ -99,9 +99,11 @@ public:
     // MarioActor::mHealth / mMaxHealth.
     std::uint32_t health() override { return guest_load_u32(memory_, actor_ + 0x380u, services_, pc_); }
     std::uint32_t max_health() override { return guest_load_u32(memory_, actor_ + 0x3E0u, services_, pc_); }
-    // GameDataFunction::getPlayerLeft / getStarPieceNum.
+    // GameDataFunction::getPlayerLeft. Star bits as the counter on screen
+    // reads them, MR::getStarPieceNum: the galaxy's ScenePlayingResult, the
+    // stocked ones in the Observatory.
     std::int32_t lives() override { return static_cast<std::int32_t>(call(0x803B01F0u, 0u)); }
-    std::int32_t star_bits() override { return static_cast<std::int32_t>(call(0x803B02DCu, 0u)); }
+    std::int32_t star_bits() override { return static_cast<std::int32_t>(call(0x803CC4ECu, 0u)); }
     // MarioActor::incLife(u32): plays the game's own recovery sound.
     void heal(std::uint32_t amount) override { call(0x802B1CE4u, actor_, amount); }
     // MarioActor::decLife(0): one point, as a hit takes it.
@@ -118,8 +120,8 @@ public:
         }
         if (delta < 0) call(0x803B021Cu, static_cast<std::uint32_t>(delta));
     }
-    // GameDataFunction::addStarPiece.
-    void add_star_bits(std::int32_t delta) override { call(0x803B02ECu, static_cast<std::uint32_t>(delta)); }
+    // MR::addStarPiece, as picking one up does (same two places).
+    void add_star_bits(std::int32_t delta) override { call(0x803CC52Cu, static_cast<std::uint32_t>(delta)); }
 
 private:
     std::uint32_t call(std::uint32_t function, std::uint32_t r3, std::uint32_t r4 = 0u) {
