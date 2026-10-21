@@ -73,6 +73,25 @@ bool test_durations_are_clamped() {
     return expect(galaxy::cloud90::remaining_vi(Effect::DrunkStick, 0) == 3600, "max 60 s");
 }
 
+bool test_spin_sends_repeated_shake_bursts() {
+    galaxy::cloud90::reset_for_tests();
+    galaxy::cloud90::enqueue(Effect::ForceSpin, 5000);
+    int shaken = 0;
+    int bursts = 0;
+    bool was = false;
+    for (int i = 0; i < 100; ++i) {  // 100 reports, ~1 s
+        WiimoteInputSnapshot s{};
+        galaxy::cloud90::apply_input_effects(s, 10, true);
+        const bool shaking = s.accel.x == 0x02f0u || s.accel.x == 0x0110u;
+        if (shaking) ++shaken;
+        if (shaking && !was) ++bursts;
+        was = shaking;
+    }
+    bool ok = expect(bursts >= 2, "a new burst every ~40 reports");
+    ok &= expect(shaken >= 24 && shaken < 100, "bursts with pauses between them");
+    return ok;
+}
+
 }  // namespace
 
 int main() {
@@ -81,6 +100,7 @@ int main() {
     ok &= test_menus_freeze_the_timer_and_the_report();
     ok &= test_no_jump_beats_auto_jump_and_panic_clears();
     ok &= test_durations_are_clamped();
+    ok &= test_spin_sends_repeated_shake_bursts();
     if (ok) std::cout << "cloud90 effects: all tests passed\n";
     return ok ? 0 : 1;
 }

@@ -33,6 +33,11 @@ std::atomic<bool> g_in_play{true};
 std::array<std::uint64_t, kEffectCount> g_until{};  // VI an effect ends at
 std::uint64_t g_last_vi = 0;
 bool g_has_last_vi = false;
+// Spin: a new shake burst every this many reports (~0.4 s at 100 Hz).
+constexpr std::uint32_t kSpinEveryReports = 40;
+std::uint32_t g_spin_reports = 0;
+bool g_spin_previous_press = false;
+std::uint8_t g_spin_frames_left = 0;
 
 std::uint64_t ms_to_vi(std::uint32_t ms) noexcept {
     return (static_cast<std::uint64_t>(std::min(ms, kMaxEffectMs)) * 60u + 999u) / 1000u;
@@ -131,10 +136,15 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
         // Pressed 6 VIs out of every 45 (a jump about every 0.75 s).
         snapshot.buttons.a = snapshot.buttons.a || (vi % 45u) < 6u;
     }
-    if (active(Effect::ForceSpin, vi)) {
-        // A hard shake on X, flipping every other VI, reads as a spin.
-        snapshot.accel.x = (vi & 1u) ? 0x3f0u : 0x010u;
-    }
+    // Spin: the same 12-report shake burst Nebula sends when the spin key is
+    // pressed, re-pressed every kSpinEveryReports so each burst reads as a
+    // new shake (a steady shake doesn't). A burst in progress finishes even
+    // when the effect ends.
+    const bool spinning = active(Effect::ForceSpin, vi);
+    const bool press = spinning && (g_spin_reports++ % kSpinEveryReports) < 2u;
+    if (!spinning) g_spin_reports = 0;
+    (void)galaxy::input::advance_wiimote_shake_accel(
+        snapshot, press, g_spin_previous_press, g_spin_frames_left);
 }
 
 std::optional<Effect> effect_from_name(std::string_view name) noexcept {
@@ -166,6 +176,9 @@ void reset_for_tests() noexcept {
     g_until.fill(0);
     g_last_vi = 0;
     g_has_last_vi = false;
+    g_spin_reports = 0;
+    g_spin_previous_press = false;
+    g_spin_frames_left = 0;
 }
 
 }  // namespace galaxy::cloud90
