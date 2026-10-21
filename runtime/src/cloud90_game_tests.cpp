@@ -2,6 +2,8 @@
 #include "galaxy/cloud90_game.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <iostream>
 
 namespace {
@@ -36,8 +38,19 @@ public:
         if (status == galaxy::cloud90::kItemLifeUp) max_hp = 6;
     }
     void shake_camera() override { ++shakes; }
-    bool rainbow = false;
-    bool rainbow_ready() override { return rainbow; }
+    std::uint32_t ready_items = 0;  // bit n: item n's models are loaded
+    bool item_ready(std::int32_t status) override { return (ready_items >> status) & 1u; }
+    bool dead = false;
+    void kill() override { ++calls; dead = true; hp = 0; }
+    float mario_scale = 1.0f;
+    float scale() override { return mario_scale; }
+    void set_scale(float s) override { mario_scale = s; }
+    // A table of 0x240 bytes at guest address 0x80001000: float i is 1 + i.
+    std::array<float, 0x240 / 4> table{};
+    FakePlayer() { for (std::size_t i = 0; i < table.size(); ++i) table[i] = 1.0f + static_cast<float>(i); }
+    std::uint32_t const_table() override { return 0x80001000u; }
+    float read_f32(std::uint32_t a) override { return table[(a - 0x80001000u) / 4u]; }
+    void write_f32(std::uint32_t a, float v) override { table[(a - 0x80001000u) / 4u] = v; }
 };
 
 void reset() {
@@ -145,11 +158,59 @@ bool test_batch_two() {
     galaxy::cloud90::on_player_frame(p, 6000);
     ok &= expect(p.item != galaxy::cloud90::kItemRainbowStar, "no rainbow without its models");
     ok &= expect(!galaxy::cloud90::game_action_applicable(GameAction::Rainbow, 6010), "refused");
-    p.rainbow = true;
+    p.ready_items = 1u << galaxy::cloud90::kItemRainbowStar;
     galaxy::cloud90::on_player_frame(p, 6400);
     galaxy::cloud90::request_game_action(GameAction::Rainbow, 6400);
     galaxy::cloud90::on_player_frame(p, 6800);
     ok &= expect(p.item == galaxy::cloud90::kItemRainbowStar, "rainbow where the galaxy has it");
+    return ok;
+}
+
+bool near(float a, float b) { return std::fabs(a - b) < 1e-4f; }
+
+bool test_timed_actions_are_put_back() {
+    reset();
+    FakePlayer p;
+    bool ok = expect(!galaxy::cloud90::request_game_action(GameAction::Giant, 0), "timed needs a duration");
+    galaxy::cloud90::request_game_action(GameAction::Giant, 0, 1000);
+    galaxy::cloud90::on_player_frame(p, 0);
+    ok &= expect(near(p.mario_scale, galaxy::cloud90::kGiantScale), "giant");
+    galaxy::cloud90::request_game_action(GameAction::SuperJump, 0, 1000);
+    galaxy::cloud90::on_player_frame(p, 300);
+    ok &= expect(near(p.table[0], 1.0f * galaxy::cloud90::kSuperJumpFactor) &&
+                     near(p.table[8], 9.0f * galaxy::cloud90::kSuperJumpFactor) && near(p.table[9], 10.0f),
+                 "jump heights only");
+    galaxy::cloud90::on_player_frame(p, 600);
+    ok &= expect(near(p.table[0], 1.0f * galaxy::cloud90::kSuperJumpFactor), "scaled once, not every frame");
+    galaxy::cloud90::on_player_frame(p, 1001);
+    ok &= expect(near(p.mario_scale, 1.0f), "giant over: size back");
+    galaxy::cloud90::on_player_frame(p, 1301);
+    ok &= expect(near(p.table[0], 1.0f) && near(p.table[8], 9.0f), "jump over: table back");
+    galaxy::cloud90::request_game_action(GameAction::SuperSpeed, 2000, 5000);
+    galaxy::cloud90::on_player_frame(p, 2000);
+    ok &= expect(near(p.table[0x224 / 4], (1.0f + 0x224 / 4) * galaxy::cloud90::kSuperSpeedFactor), "speed");
+    galaxy::cloud90::panic();
+    galaxy::cloud90::set_paused(false);
+    galaxy::cloud90::on_player_frame(p, 2100);
+    ok &= expect(near(p.table[0x224 / 4], 1.0f + 0x224 / 4), "panic puts it back at once");
+    return ok;
+}
+
+bool test_death_and_power_ups() {
+    reset();
+    FakePlayer p;
+    galaxy::cloud90::on_player_frame(p, 0);
+    bool ok = expect(!galaxy::cloud90::game_action_applicable(GameAction::PowerBee, 10), "no bee here");
+    p.ready_items = 1u << galaxy::cloud90::kItemBee;
+    galaxy::cloud90::on_player_frame(p, 20);
+    ok &= expect(galaxy::cloud90::game_action_applicable(GameAction::PowerBee, 30), "bee galaxy");
+    galaxy::cloud90::request_game_action(GameAction::PowerBee, 30);
+    galaxy::cloud90::on_player_frame(p, 40);
+    ok &= expect(p.item == galaxy::cloud90::kItemBee, "bee given");
+    galaxy::cloud90::request_game_action(GameAction::Death, 40);
+    galaxy::cloud90::on_player_frame(p, 400);
+    ok &= expect(p.dead, "death");
+    ok &= expect(!galaxy::cloud90::game_action_applicable(GameAction::Death, 410), "not twice");
     return ok;
 }
 
@@ -206,6 +267,8 @@ int main() {
     ok &= test_heal_only_when_hurt();
     ok &= test_coins();
     ok &= test_batch_two();
+    ok &= test_timed_actions_are_put_back();
+    ok &= test_death_and_power_ups();
     ok &= test_old_requests_expire();
     ok &= test_panic_clears_and_pause_refuses();
     ok &= test_queue_is_bounded();

@@ -2227,7 +2227,8 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 galaxy::cloud90::request_game_action(
                     static_cast<galaxy::cloud90::GameAction>(s_next_action),
                     static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now().time_since_epoch()).count()));
+                        std::chrono::steady_clock::now().time_since_epoch()).count()),
+                    10'000u);  // the timed ones (giant, super jump…) last 10 s
                 s_next_action = (s_next_action + 1) % kCount;
             } else if (wp == VK_F6) {
                 static int s_next_screen = 0;

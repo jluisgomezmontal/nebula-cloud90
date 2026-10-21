@@ -2,6 +2,8 @@
 
 #include "galaxy/cloud90_effects.h"
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <deque>
 #include <mutex>
@@ -12,6 +14,7 @@ namespace {
 struct Queued {
     GameAction action;
     std::uint64_t at_ms;
+    std::uint32_t duration_ms;
 };
 
 std::mutex g_mutex;
@@ -25,20 +28,66 @@ std::atomic<std::uint32_t> g_max_health{0};
 std::atomic<std::int32_t> g_lives{0};
 std::atomic<std::int32_t> g_star_bits{0};
 std::atomic<std::int32_t> g_coins{0};
-// Panic from another thread: the game thread ends a running shake.
+// Bit n: item status n can be given now (its models are loaded).
+std::atomic<std::uint32_t> g_items_ready{0};
+// Panic from another thread: the game thread ends what's running.
 std::atomic<bool> g_clear_requested{false};
-std::atomic<bool> g_rainbow_ready{false};
+
+// The timed actions, Giant..SuperSpeed.
+constexpr std::size_t kTimedFirst = static_cast<std::size_t>(GameAction::Giant);
+constexpr std::size_t kTimedCount = static_cast<std::size_t>(GameAction::Count) - kTimedFirst;
+
+// Floats of MarioConstTable a timed action scales: [first, first + 4 * count).
+struct TableChange {
+    GameAction action;
+    std::uint32_t first;
+    std::uint32_t count;
+    float factor;
+};
+constexpr std::array<TableChange, 3> kTableChanges{{
+    {GameAction::SuperJump, 0x000u, 9u, kSuperJumpFactor},     // mJumpHeight[9]
+    {GameAction::MoonGravity, 0x024u, 12u, kMoonGravityFactor},  // mGravityJumping[12]
+    {GameAction::SuperSpeed, 0x224u, 1u, kSuperSpeedFactor},   // mWalkSpeed
+}};
+constexpr std::size_t kMaxTableFloats = 12u;
+
+struct SavedTable {
+    bool saved = false;
+    std::uint32_t table = 0;
+    std::array<float, kMaxTableFloats> values{};
+};
 
 // Game thread only.
 std::uint64_t g_shake_until_ms = 0;
 std::uint64_t g_last_shake_ms = 0;
 std::uint64_t g_last_action_ms = 0;
 bool g_has_last_action = false;
+std::array<std::uint64_t, kTimedCount> g_timed_until{};
+bool g_scale_saved = false;
+float g_saved_scale = 1.0f;
+std::array<SavedTable, kTableChanges.size()> g_saved_tables{};
+
+std::size_t timed_index(GameAction action) noexcept {
+    return static_cast<std::size_t>(action) - kTimedFirst;
+}
 
 bool fresh(std::uint64_t now_ms) noexcept {
     if (!g_seen_frame.load(std::memory_order_acquire)) return false;
     const std::uint64_t last = g_last_frame_ms.load(std::memory_order_acquire);
     return now_ms >= last ? now_ms - last <= kPlayerFreshMs : true;
+}
+
+std::int32_t item_of(GameAction action) noexcept {
+    switch (action) {
+    case GameAction::Rainbow: return kItemRainbowStar;
+    case GameAction::PowerSpring: return kItemSpring;
+    case GameAction::PowerBee: return kItemBee;
+    case GameAction::PowerBoo: return kItemBoo;
+    case GameAction::PowerIce: return kItemIce;
+    case GameAction::PowerFire: return kItemFire;
+    case GameAction::PowerFlying: return kItemFlying;
+    default: return 0;
+    }
 }
 
 // Against values the caller read, so the link (atomics) and the game thread
@@ -55,11 +104,75 @@ bool useful(GameAction action, std::uint32_t health, std::uint32_t max_health, s
     case GameAction::CoinsAdd: return coins < 999;
     case GameAction::CoinsRemove: return coins > 0;
     case GameAction::LifeMushroom: return max_health <= 3;
-    case GameAction::Rainbow: return g_rainbow_ready.load(std::memory_order_relaxed);
     case GameAction::CameraShake: return true;
+    case GameAction::Death: return health > 0;
+    case GameAction::Rainbow:
+    case GameAction::PowerSpring:
+    case GameAction::PowerBee:
+    case GameAction::PowerBoo:
+    case GameAction::PowerIce:
+    case GameAction::PowerFire:
+    case GameAction::PowerFlying:
+        return (g_items_ready.load(std::memory_order_relaxed) >> item_of(action)) & 1u;
+    case GameAction::Giant:
+    case GameAction::Mini:
+    case GameAction::SuperJump:
+    case GameAction::MoonGravity:
+    case GameAction::SuperSpeed: return true;
     case GameAction::Count: break;
     }
     return false;
+}
+
+void refresh_items_ready(PlayerAccess& player) noexcept {
+    std::uint32_t ready = 0;
+    for (const std::int32_t item :
+         {kItemSpring, kItemBee, kItemBoo, kItemIce, kItemFire, kItemFlying, kItemRainbowStar})
+        if (player.item_ready(item)) ready |= 1u << item;
+    g_items_ready.store(ready, std::memory_order_relaxed);
+}
+
+// Keeps the timed actions applied while they run and puts everything back
+// once they end (or at once after a panic, when every `until` is 0).
+void apply_timed(PlayerAccess& player, std::uint64_t now_ms) noexcept {
+    const auto active = [now_ms](GameAction a) { return now_ms < g_timed_until[timed_index(a)]; };
+
+    const bool giant = active(GameAction::Giant);
+    const bool mini = active(GameAction::Mini);
+    if (giant || mini) {
+        if (!g_scale_saved) {
+            g_saved_scale = player.scale();
+            g_scale_saved = true;
+        }
+        // Both running: the one asked for last (it ends later) wins.
+        const bool use_giant =
+            giant && (!mini || g_timed_until[timed_index(GameAction::Giant)] >=
+                                   g_timed_until[timed_index(GameAction::Mini)]);
+        player.set_scale(use_giant ? kGiantScale : kMiniScale);
+    } else if (g_scale_saved) {
+        player.set_scale(g_saved_scale);
+        g_scale_saved = false;
+    }
+
+    for (std::size_t i = 0; i < kTableChanges.size(); ++i) {
+        const TableChange& change = kTableChanges[i];
+        SavedTable& saved = g_saved_tables[i];
+        if (active(change.action) && !saved.saved) {
+            const std::uint32_t table = player.const_table();
+            if (table == 0u) continue;
+            for (std::uint32_t f = 0; f < change.count; ++f) {
+                const std::uint32_t address = table + change.first + f * 4u;
+                saved.values[f] = player.read_f32(address);
+                player.write_f32(address, saved.values[f] * change.factor);
+            }
+            saved.table = table;
+            saved.saved = true;
+        } else if (!active(change.action) && saved.saved) {
+            for (std::uint32_t f = 0; f < change.count; ++f)
+                player.write_f32(saved.table + change.first + f * 4u, saved.values[f]);
+            saved.saved = false;
+        }
+    }
 }
 
 }  // namespace
@@ -76,7 +189,23 @@ std::optional<GameAction> game_action_from_name(std::string_view name) noexcept 
     if (name == "life_mushroom") return GameAction::LifeMushroom;
     if (name == "rainbow_star") return GameAction::Rainbow;
     if (name == "camera_shake") return GameAction::CameraShake;
+    if (name == "death") return GameAction::Death;
+    if (name == "power_spring") return GameAction::PowerSpring;
+    if (name == "power_bee") return GameAction::PowerBee;
+    if (name == "power_boo") return GameAction::PowerBoo;
+    if (name == "power_ice") return GameAction::PowerIce;
+    if (name == "power_fire") return GameAction::PowerFire;
+    if (name == "power_flying") return GameAction::PowerFlying;
+    if (name == "giant") return GameAction::Giant;
+    if (name == "mini") return GameAction::Mini;
+    if (name == "super_jump") return GameAction::SuperJump;
+    if (name == "moon_gravity") return GameAction::MoonGravity;
+    if (name == "super_speed") return GameAction::SuperSpeed;
     return std::nullopt;
+}
+
+bool game_action_timed(GameAction action) noexcept {
+    return action >= GameAction::Giant && action < GameAction::Count;
 }
 
 bool game_action_applicable(GameAction action, std::uint64_t now_ms) noexcept {
@@ -86,12 +215,13 @@ bool game_action_applicable(GameAction action, std::uint64_t now_ms) noexcept {
                   g_star_bits.load(std::memory_order_relaxed), g_coins.load(std::memory_order_relaxed));
 }
 
-bool request_game_action(GameAction action, std::uint64_t now_ms) noexcept {
+bool request_game_action(GameAction action, std::uint64_t now_ms, std::uint32_t duration_ms) noexcept {
     if (action >= GameAction::Count || paused()) return false;
+    if (game_action_timed(action) && duration_ms == 0u) return false;
     try {
         const std::lock_guard<std::mutex> lock(g_mutex);
         if (g_queue.size() >= kGameQueueMax) return false;
-        g_queue.push_back({action, now_ms});
+        g_queue.push_back({action, now_ms, duration_ms});
         return true;
     } catch (...) {
         return false;
@@ -104,25 +234,28 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
     std::int32_t lives = player.lives();
     std::int32_t star_bits = player.star_bits();
     std::int32_t coins = player.coins();
-    if (g_clear_requested.exchange(false, std::memory_order_relaxed)) g_shake_until_ms = 0;
-    g_rainbow_ready.store(player.rainbow_ready(), std::memory_order_relaxed);
+    if (g_clear_requested.exchange(false, std::memory_order_relaxed)) {
+        g_shake_until_ms = 0;
+        g_timed_until.fill(0);
+    }
+    refresh_items_ready(player);
 
-    std::optional<GameAction> next;
+    std::optional<Queued> next;
     if (!paused() && (!g_has_last_action || now_ms - g_last_action_ms >= kGameActionSpacingMs)) {
         try {
             const std::lock_guard<std::mutex> lock(g_mutex);
             while (!g_queue.empty() && now_ms - g_queue.front().at_ms > kGameActionTimeoutMs)
                 g_queue.pop_front();
             if (!g_queue.empty()) {
-                next = g_queue.front().action;
+                next = g_queue.front();
                 g_queue.pop_front();
             }
         } catch (...) {
         }
     }
     // Checked again here: several queued actions may have used it up.
-    if (next && useful(*next, health, max_health, lives, star_bits, coins)) {
-        switch (*next) {
+    if (next && useful(next->action, health, max_health, lives, star_bits, coins)) {
+        switch (next->action) {
         case GameAction::Heal: player.heal(1); break;
         case GameAction::Damage: player.damage(); break;
         case GameAction::LifeUp: player.add_lives(1); break;
@@ -134,11 +267,29 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
         case GameAction::CoinsAdd: player.add_coins(kCoinsStep); break;
         case GameAction::CoinsRemove: player.add_coins(-(coins < kCoinsStep ? coins : kCoinsStep)); break;
         case GameAction::LifeMushroom: player.item_status(kItemLifeUp); break;
-        case GameAction::Rainbow: player.item_status(kItemRainbowStar); break;
         case GameAction::CameraShake:
             g_shake_until_ms = now_ms + kCameraShakeMs;
             g_last_shake_ms = 0;
             break;
+        case GameAction::Death: player.kill(); break;
+        case GameAction::Rainbow:
+        case GameAction::PowerSpring:
+        case GameAction::PowerBee:
+        case GameAction::PowerBoo:
+        case GameAction::PowerIce:
+        case GameAction::PowerFire:
+        case GameAction::PowerFlying: player.item_status(item_of(next->action)); break;
+        case GameAction::Giant:
+        case GameAction::Mini:
+        case GameAction::SuperJump:
+        case GameAction::MoonGravity:
+        case GameAction::SuperSpeed: {
+            // A repeat extends from whichever ends later: now or the current run.
+            auto& until = g_timed_until[timed_index(next->action)];
+            until = std::max(until, now_ms) + std::min<std::uint64_t>(next->duration_ms, kMaxTimedMs);
+            until = std::min(until, now_ms + kMaxTimedMs);
+            break;
+        }
         case GameAction::Count: break;
         }
         g_last_action_ms = now_ms;
@@ -149,10 +300,8 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
         star_bits = player.star_bits();
         coins = player.coins();
     }
+    apply_timed(player, now_ms);
 
-    g_health.store(health, std::memory_order_relaxed);
-    g_max_health.store(max_health, std::memory_order_relaxed);
-    g_lives.store(lives, std::memory_order_relaxed);
     // A shake lasts a fraction of a second: repeated while the effect runs.
     if (now_ms < g_shake_until_ms && !paused() &&
         (g_last_shake_ms == 0 || now_ms - g_last_shake_ms >= kCameraShakeEveryMs)) {
@@ -160,6 +309,9 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
         g_last_shake_ms = now_ms;
     }
 
+    g_health.store(health, std::memory_order_relaxed);
+    g_max_health.store(max_health, std::memory_order_relaxed);
+    g_lives.store(lives, std::memory_order_relaxed);
     g_star_bits.store(star_bits, std::memory_order_relaxed);
     g_coins.store(coins, std::memory_order_relaxed);
     g_last_frame_ms.store(now_ms, std::memory_order_release);
@@ -176,7 +328,12 @@ void clear_game_actions() noexcept {
 }
 
 void reset_game_for_tests() noexcept {
-    clear_game_actions();
+    try {
+        const std::lock_guard<std::mutex> lock(g_mutex);
+        g_queue.clear();
+    } catch (...) {
+    }
+    g_clear_requested.store(false);
     g_seen_frame.store(false);
     g_last_frame_ms.store(0);
     g_health.store(0);
@@ -184,11 +341,15 @@ void reset_game_for_tests() noexcept {
     g_lives.store(0);
     g_star_bits.store(0);
     g_coins.store(0);
+    g_items_ready.store(0);
     g_has_last_action = false;
     g_last_action_ms = 0;
     g_shake_until_ms = 0;
     g_last_shake_ms = 0;
-    g_rainbow_ready.store(false);
+    g_timed_until.fill(0);
+    g_scale_saved = false;
+    g_saved_scale = 1.0f;
+    g_saved_tables = {};
 }
 
 }  // namespace galaxy::cloud90

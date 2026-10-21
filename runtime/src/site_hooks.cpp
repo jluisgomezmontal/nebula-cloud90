@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <bit>
 #include <chrono>
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
 
@@ -157,12 +158,48 @@ public:
     void item_status(std::int32_t status) override { call(0x803F2868u, static_cast<std::uint32_t>(status)); }
     // MR::shakeCameraVeryStrong.
     void shake_camera() override { call(0x803F1384u, 0u); }
-    // What MarioActor::setPlayerMode(Invincible) touches first: +0x9C8 and
-    // the rainbow hands +0xA50/+0xA54 (garbage outside those galaxies).
-    bool rainbow_ready() override {
-        for (const std::uint32_t field : {0x9C8u, 0xA50u, 0xA54u})
-            if (!rmge01_guest_object(guest_load_u32(memory_, actor_ + field, services_, pc_))) return false;
-        return true;
+    // The models MarioActor::setPlayerMode uses for each item, which only
+    // galaxies with that item load (garbage elsewhere, and the game
+    // crashes): +0x9C8 the body's effect model (every power-up), the rainbow
+    // hands +0xA50/+0xA54, the bee's +0x9E4/+0x9E8, the boo's +0x9A4.
+    bool item_ready(std::int32_t status) override {
+        const auto loaded = [this](std::initializer_list<std::uint32_t> fields) {
+            for (const std::uint32_t field : fields)
+                if (!rmge01_guest_object(guest_load_u32(memory_, actor_ + field, services_, pc_))) return false;
+            return true;
+        };
+        switch (status) {
+        case cloud90::kItemRainbowStar: return loaded({0x9C8u, 0xA50u, 0xA54u});
+        case cloud90::kItemBee: return loaded({0x9C8u, 0x9E4u, 0x9E8u});
+        case cloud90::kItemBoo: return loaded({0x9C8u, 0x9A4u});
+        case cloud90::kItemSpring:
+        case cloud90::kItemIce:
+        case cloud90::kItemFire:
+        case cloud90::kItemFlying: return loaded({0x9C8u});
+        default: return false;
+        }
+    }
+    // MarioActor::forceKill(3): the ordinary death (rumble, health 0, game over nerve).
+    void kill() override { call(0x802B8834u, actor_, 3u); }
+    // LiveActor::mScale (+0x24), x of the three.
+    float scale() override { return read_f32(actor_ + 0x24u); }
+    void set_scale(float scale) override {
+        for (std::uint32_t axis = 0; axis < 3u; ++axis) write_f32(actor_ + 0x24u + axis * 4u, scale);
+    }
+    // MarioActor::mConst (+0x23C) -> MarioConst: mTable[2], mCurrentTable (+8).
+    std::uint32_t const_table() override {
+        const std::uint32_t mario_const = guest_load_u32(memory_, actor_ + 0x23Cu, services_, pc_);
+        if (!rmge01_guest_object(mario_const)) return 0u;
+        const std::uint32_t index = guest_load_u32(memory_, mario_const + 8u, services_, pc_);
+        if (index > 1u) return 0u;
+        const std::uint32_t table = guest_load_u32(memory_, mario_const + index * 4u, services_, pc_);
+        return rmge01_guest_object(table) ? table : 0u;
+    }
+    float read_f32(std::uint32_t address) override {
+        return std::bit_cast<float>(guest_load_u32(memory_, address, services_, pc_));
+    }
+    void write_f32(std::uint32_t address, float value) override {
+        guest_store_u32(memory_, address, std::bit_cast<std::uint32_t>(value), services_, pc_);
     }
 
 private:

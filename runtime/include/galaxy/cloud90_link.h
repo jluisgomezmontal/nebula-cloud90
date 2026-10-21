@@ -15,7 +15,7 @@
 namespace galaxy::cloud90 {
 
 // The build the server must accept (GAMES.smg.versions on the backend).
-inline constexpr const char* kLinkVersion = "nebula-1.0.1+cloud90.5";
+inline constexpr const char* kLinkVersion = "nebula-1.0.1+cloud90.6";
 
 // Starts the link thread. Call once.
 void start_link() noexcept;

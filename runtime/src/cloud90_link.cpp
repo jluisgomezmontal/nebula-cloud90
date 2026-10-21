@@ -327,11 +327,15 @@ void handle_message(Connection& conn, const std::string& msg) {
             std::chrono::steady_clock::now().time_since_epoch()).count());
         std::string reason;
         if (!effect && !action) reason = "efecto desconocido";
-        else if (effect && ms <= 0) reason = "duración inválida";
+        else if ((effect || game_action_timed(*action)) && ms <= 0) reason = "duración inválida";
         else if (paused()) reason = "en pausa";
         else if (effect ? !effect_applicable(*effect) : !game_action_applicable(*action, now_ms))
             reason = "no disponible ahora";
-        else if (action && !request_game_action(*action, now_ms)) reason = "no disponible ahora";
+        else if (action && !request_game_action(*action, now_ms,
+                                                game_action_timed(*action)
+                                                    ? static_cast<std::uint32_t>(std::min<long long>(ms, kMaxEffectMs))
+                                                    : 0u))
+            reason = "no disponible ahora";
         if (reason.empty() && effect)
             enqueue(*effect, static_cast<std::uint32_t>(std::min<long long>(ms, kMaxEffectMs)));
         conn.send("{\"type\":\"ack\",\"id\":\"" + escape(id) + "\",\"ok\":" + (reason.empty() ? "true" : "false") +
