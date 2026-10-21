@@ -111,14 +111,23 @@ public:
     // As a 1-Up mushroom does it: MR::requestOneUp (the "1UP" board) and
     // MR::incPlayerLeft. A life taken is GameDataFunction::addPlayerLeft(-1),
     // not MR::decPlayerLeft, which also counts a miss in the save. The lives
-    // counter on screen only counts up, so a taken life shows on the next
-    // scene.
+    // counter on screen keeps its own number and only counts it up, so that
+    // number is set too: MR::getGameSceneLayoutHolder() +0x34
+    // CounterLayoutController, +0x30 PlayerLeft, +0x20 its count.
     void add_lives(std::int32_t delta) override {
         for (; delta > 0; --delta) {
             call(0x803F8170u, 0u);
             call(0x803CC3D0u, 0u);
         }
-        if (delta < 0) call(0x803B021Cu, static_cast<std::uint32_t>(delta));
+        if (delta >= 0) return;
+        call(0x803B021Cu, static_cast<std::uint32_t>(delta));
+        const std::uint32_t holder = call(0x80361738u, 0u);
+        if (!rmge01_guest_object(holder)) return;
+        const std::uint32_t counters = guest_load_u32(memory_, holder + 0x34u, services_, pc_);
+        if (!rmge01_guest_object(counters)) return;
+        const std::uint32_t player_left = guest_load_u32(memory_, counters + 0x30u, services_, pc_);
+        if (!rmge01_guest_object(player_left)) return;
+        guest_store_u32(memory_, player_left + 0x20u, static_cast<std::uint32_t>(lives()), services_, pc_);
     }
     // MR::addStarPiece, as picking one up does (same two places).
     void add_star_bits(std::int32_t delta) override { call(0x803CC52Cu, static_cast<std::uint32_t>(delta)); }
