@@ -1,4 +1,5 @@
 #include "galaxy/native_host.h"
+#include "galaxy/cloud90_effects.h"
 
 #include "galaxy/ai_dma_timing.h"
 #include "galaxy/native_audio_anomaly.h"
@@ -32028,7 +32029,9 @@ void GuestAddressSpace::service_virtual_wiimote_input_device(
     // repeated selector lookups.
     const std::optional<std::uint64_t> first_mario_control_vi =
         native_input_first_mario_control_vi();
-    const galaxy::input::WiimoteInputSnapshot snapshot =
+    const galaxy::input::PlayContext play_context =
+        read_play_context(*this, current_vi);
+    galaxy::input::WiimoteInputSnapshot snapshot =
         build_native_hid_input_snapshot(
             emitted_report_mode,
             current_vi,
@@ -32036,8 +32039,12 @@ void GuestAddressSpace::service_virtual_wiimote_input_device(
             first_mario_control_vi,
             ir_input_enabled,
             &host_pointer_metadata,
-            read_play_context(*this, current_vi),
+            play_context,
             read_tilt_section(*this));
+    // Cloud90 Game Link: live-stream effects on this report (menus untouched).
+    galaxy::cloud90::apply_input_effects(
+        snapshot, current_vi,
+        play_context == galaxy::input::PlayContext::Play);
     set_latest_native_hid_snapshot(
         snapshot,
         host_pointer_metadata.pointer_x,

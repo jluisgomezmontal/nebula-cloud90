@@ -1,4 +1,5 @@
 #include "galaxy/gx/renderer_d3d12.h"
+#include "galaxy/cloud90_effects.h"
 #include "galaxy/crash_notes.h"
 #include "galaxy/gx/display_modes.h"
 
@@ -2167,6 +2168,18 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             const std::lock_guard<std::recursive_mutex> lock(s_native_settings_mutex);
             s_handled_key_normalized = galaxy::input::normalize_native_window_key(
                 raw, shift, (static_cast<UINT>(lp) & (1u << 24u)) != 0u);
+        }
+        // Cloud90 Game Link: F8 tries an effect (inverted controls, 10 s),
+        // F9 is the panic key (ends every effect; F9 again resumes).
+        if (!was_down && (wp == VK_F8 || wp == VK_F9)) {
+            if (wp == VK_F8) {
+                galaxy::cloud90::enqueue(galaxy::cloud90::Effect::InvertControls, 10'000);
+            } else if (galaxy::cloud90::paused()) {
+                galaxy::cloud90::set_paused(false);
+            } else {
+                galaxy::cloud90::panic();
+            }
+            return 0;
         }
         if (native_settings_handle_window_key(wp, was_down)) {
             return 0;
