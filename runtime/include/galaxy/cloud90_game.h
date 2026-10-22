@@ -43,6 +43,7 @@ enum class GameAction : std::uint8_t {
     SpawnBombomb,
     SpawnBoo,
     SpawnBulletBill,  // fired at Mario from ahead of him
+    SpawnMagikoopa,   // casts fire spells at him
     // For the duration Cloud90 sends, then put back.
     Giant,           // Mario at kGiantScale
     Mini,            // Mario at kMiniScale
@@ -102,7 +103,7 @@ using Vec3 = std::array<float, 3>;
 
 // Enemies Cloud90 can bring (PLAN-GAME-TROLL.md): a few of each are created,
 // dead, with every galaxy, and come to life near Mario when asked.
-enum class EnemyKind : std::uint8_t { Goomba, Bombomb, Boo, BulletBill, Count };
+enum class EnemyKind : std::uint8_t { Goomba, Bombomb, Boo, BulletBill, Magikoopa, Count };
 
 // What the game thread reads and changes. The site hook implements it with
 // guest calls; tests use a fake.

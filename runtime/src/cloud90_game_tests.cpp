@@ -412,7 +412,7 @@ bool test_enemies() {
     galaxy::cloud90::on_player_frame(p, 0);
     bool ok = expect(!galaxy::cloud90::game_action_applicable(GameAction::SpawnGoomba, 10),
                      "no Goombas made for this galaxy");
-    p.enemies_waiting = {2, 0, 0, 1};
+    p.enemies_waiting = {2, 0, 0, 1, 0};
     galaxy::cloud90::on_player_frame(p, 20);
     ok &= expect(galaxy::cloud90::game_action_applicable(GameAction::SpawnGoomba, 30), "Goombas waiting");
     ok &= expect(!galaxy::cloud90::game_action_applicable(GameAction::SpawnBombomb, 30), "no Bob-ombs");

@@ -141,6 +141,7 @@ EnemyKind enemy_of(GameAction action) noexcept {
     case GameAction::SpawnBombomb: return EnemyKind::Bombomb;
     case GameAction::SpawnBoo: return EnemyKind::Boo;
     case GameAction::SpawnBulletBill: return EnemyKind::BulletBill;
+    case GameAction::SpawnMagikoopa: return EnemyKind::Magikoopa;
     default: return EnemyKind::Goomba;
     }
 }
@@ -207,6 +208,7 @@ bool useful(GameAction action, std::uint64_t now_ms, std::uint32_t health, std::
     case GameAction::SpawnBombomb:
     case GameAction::SpawnBoo:
     case GameAction::SpawnBulletBill:
+    case GameAction::SpawnMagikoopa:
         return health > 0 && free &&
                ((g_enemies_ready.load(std::memory_order_relaxed) >> static_cast<std::uint32_t>(enemy_of(action))) & 1u);
     case GameAction::Giant:
@@ -352,6 +354,7 @@ std::optional<GameAction> game_action_from_name(std::string_view name) noexcept 
     if (name == "spawn_bombomb") return GameAction::SpawnBombomb;
     if (name == "spawn_boo") return GameAction::SpawnBoo;
     if (name == "spawn_bullet_bill") return GameAction::SpawnBulletBill;
+    if (name == "spawn_magikoopa") return GameAction::SpawnMagikoopa;
     if (name == "giant") return GameAction::Giant;
     if (name == "mini") return GameAction::Mini;
     if (name == "super_jump") return GameAction::SuperJump;
@@ -383,6 +386,7 @@ bool game_action_troll(GameAction action) noexcept {
     case GameAction::SpawnBombomb:
     case GameAction::SpawnBoo:
     case GameAction::SpawnBulletBill:
+    case GameAction::SpawnMagikoopa:
     case GameAction::Mini:
     case GameAction::IceFloor:
     case GameAction::Slow:
@@ -508,7 +512,8 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
         case GameAction::SpawnGoomba:
         case GameAction::SpawnBombomb:
         case GameAction::SpawnBoo:
-        case GameAction::SpawnBulletBill: player.spawn_enemy(enemy_of(next->action)); break;
+        case GameAction::SpawnBulletBill:
+        case GameAction::SpawnMagikoopa: player.spawn_enemy(enemy_of(next->action)); break;
         case GameAction::Giant:
         case GameAction::Mini:
         case GameAction::SuperJump:

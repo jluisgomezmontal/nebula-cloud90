@@ -2227,7 +2227,8 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 static constexpr GameAction kTroll[] = {
                     GameAction::BackToStart, GameAction::Rewind, GameAction::Launch, GameAction::RemovePower,
                     GameAction::IceFloor,    GameAction::Slow,   GameAction::TinyJump, GameAction::SpawnGoomba,
-                    GameAction::SpawnBombomb, GameAction::SpawnBoo, GameAction::SpawnBulletBill};
+                    GameAction::SpawnBombomb, GameAction::SpawnBoo, GameAction::SpawnBulletBill,
+                    GameAction::SpawnMagikoopa};
                 static std::size_t s_next_troll = 0;
                 galaxy::cloud90::set_paused(false);
                 galaxy::cloud90::request_game_action(

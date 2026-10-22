@@ -165,6 +165,7 @@ constexpr std::uint32_t kVtMakeActorDead = 0x30u;
 // checks MR::isValidInfo before reading placement data).
 struct EnemyDef {
     const char* archive;  // ObjectData/<archive>.arc, also the object's name
+    const char* extra;    // another archive it needs (its spells…), or null
     // NameObjFactory's createNameObj<Class>(const char*), or 0: operator
     // new(size) and the constructor Class(const char*) instead.
     std::uint32_t creator;
@@ -172,18 +173,26 @@ struct EnemyDef {
     std::uint32_t constructor;
     std::uint32_t nerve;  // its first state again when it comes out (0: appear() does it)
     // Class::appear(const TVec3f& pos, const TVec3f& front) for one fired
-    // at Mario, or 0: set down in front of him and appear().
+    // at Mario, or 0: set down in front of him and brought to life.
     std::uint32_t fire;
+    // The virtual that brings it to life: appear(), or makeActorAppeared()
+    // when the class's appear() needs placement data.
+    std::uint32_t life;
     std::uint32_t count;
 };
+constexpr std::uint32_t kVtMakeActorAppeared = 0x28u;
 constexpr std::array<EnemyDef, static_cast<std::size_t>(cloud90::EnemyKind::Count)> kEnemies{{
-    {"Kuribo", 0x80264E38u, 0u, 0u, 0x8069F9B0u, 0u, 3u},   // KuriboNrvWander
-    {"BombHei", 0x80264D38u, 0u, 0u, 0u, 0u, 2u},           // BombHei::appear sets its own
+    {"Kuribo", nullptr, 0x80264E38u, 0u, 0u, 0x8069F9B0u, 0u, kVtAppear, 3u},  // KuriboNrvWander
+    {"BombHei", nullptr, 0x80264D38u, 0u, 0u, 0u, 0u, kVtAppear, 2u},  // BombHei::appear sets its own
     // Teresa::appear: its start state (waits, chases while Mario looks away).
-    {"Teresa", 0x80265438u, 0u, 0u, 0u, 0u, 2u},
+    {"Teresa", nullptr, 0x80265438u, 0u, 0u, 0u, 0u, kVtAppear, 2u},
     // A HomingKiller is placed as its launcher; the missile itself is made
     // as the launcher makes it (new 0x168 bytes, HomingKiller(const char*)).
-    {"HomingKiller", 0u, 0x168u, 0x800F54BCu, 0u, 0x800F5A44u, 2u},
+    {"HomingKiller", nullptr, 0u, 0x168u, 0x800F54BCu, 0u, 0x800F5A44u, kVtAppear, 2u},
+    // Made as Bowser Jr.'s airship makes its own: MR::createFireBallBeamKameck
+    // (fire spells, BossKameckFireBall.arc). Kameck::appear() moves it to
+    // its rail's start (none here): makeActorAppeared and KameckNrvAppear.
+    {"Kameck", "BossKameckFireBall", 0x801055CCu, 0u, 0u, 0x8069F79Cu, 0u, kVtMakeActorAppeared, 2u},
 }};
 // The scene's heaps must keep this much free after our enemies (bytes,
 // MR::getSceneHeapNapa + MR::getSceneHeapGDDR3).
@@ -213,11 +222,14 @@ public:
                             stage.rfind("Astro", 0) != 0;
         if (!galaxy || free < 2u * kEnemyHeapReserve) return;
         for (const EnemyDef& def : kEnemies) {
-            with_stack(32u, [&](std::uint32_t name) {
-                store_text(name, def.archive);
-                if ((call(0x803CE2E4u, name) & 0xFFu) == 0u)  // MR::isLoadedObjectOrLayoutArchive
-                    call(0x803CDE94u, name, 0u);              // MR::mountAsyncArchiveByObjectOrLayoutName(name, null)
-            });
+            for (const char* archive : {def.archive, def.extra}) {
+                if (!archive) continue;
+                with_stack(32u, [&](std::uint32_t name) {
+                    store_text(name, archive);
+                    if ((call(0x803CE2E4u, name) & 0xFFu) == 0u)  // MR::isLoadedObjectOrLayoutArchive
+                        call(0x803CDE94u, name, 0u);  // MR::mountAsyncArchiveByObjectOrLayoutName(name, null)
+                });
+            }
         }
         g_enemy_archives_asked = true;
     }
@@ -469,7 +481,7 @@ public:
             for (std::uint32_t axis = 0; axis < 3u; ++axis) store_f32(buffer + axis * 4u, spot[axis]);
             call(0x803BED4Cu, enemy, buffer);  // MR::resetPosition(LiveActor*, const TVec3f&)
         });
-        call_virtual(enemy, kVtAppear);
+        call_virtual(enemy, def.life);
         if (def.nerve) call(0x80165824u, enemy, def.nerve);  // LiveActor::setNerve
     }
 
