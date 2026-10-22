@@ -189,14 +189,17 @@ public:
         : GuestCalls(services, context, memory, pc) {}
 
     // After GameScene::init asked for the scenario's object archives: ours
-    // too, outside the Observatory and with room in the scene's heaps.
+    // too, in galaxies (stages named "…Galaxy", not the Observatory's
+    // "AstroGalaxy"; not FileSelect…) with room in the scene's heaps.
     void ask_archives() {
         for (auto& pool : g_enemy_pool) pool.clear();
         g_enemy_archives_asked = false;
         const std::string stage = stage_name();
         const std::uint32_t free = heap_free();
         cloud90::log_event("escena " + stage + ": memoria libre " + std::to_string(free / 1024u) + " KB");
-        if (stage.empty() || stage.rfind("Astro", 0) == 0 || free < 2u * kEnemyHeapReserve) return;
+        const bool galaxy = stage.size() > 6u && stage.compare(stage.size() - 6u, 6u, "Galaxy") == 0 &&
+                            stage.rfind("Astro", 0) != 0;
+        if (!galaxy || free < 2u * kEnemyHeapReserve) return;
         for (const EnemyDef& def : kEnemies) {
             with_stack(32u, [&](std::uint32_t name) {
                 store_text(name, def.archive);
@@ -562,7 +565,7 @@ void dispatch_site_hook(
         return;
     case SiteHookKind::Cloud90Scene:
         run_cloud90_scene(services, context, memory, guest_pc, argument);
-        break;
+        return;
     case SiteHookKind::Cloud90Player:
         run_cloud90_player(services, context, memory, guest_pc);
         return;
