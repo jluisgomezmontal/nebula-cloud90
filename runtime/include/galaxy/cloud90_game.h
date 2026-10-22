@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string_view>
@@ -31,12 +33,20 @@ enum class GameAction : std::uint8_t {
     PowerIce,
     PowerFire,
     PowerFlying,
+    // Troll (PLAN-GAME-TROLL.md).
+    BackToStart,     // back where Mario first stood after the scene loaded or he respawned
+    Rewind,          // back where he stood about kRewindMs ago
+    Launch,          // thrown up, against his gravity, at kLaunchSpeed
+    RemovePower,     // the power-up he has, gone
     // For the duration Cloud90 sends, then put back.
     Giant,           // Mario at kGiantScale
     Mini,            // Mario at kMiniScale
     SuperJump,       // jump heights x kSuperJumpFactor
     MoonGravity,     // gravity while jumping x kMoonGravityFactor
     SuperSpeed,      // walking/running speed x kSuperSpeedFactor
+    IceFloor,        // the ground's grip as on ice
+    Slow,            // walking/running speed x kSlowFactor
+    TinyJump,        // jump heights x kTinyJumpFactor
     Count,
 };
 
@@ -49,6 +59,21 @@ inline constexpr float kMiniScale = 0.45f;
 inline constexpr float kSuperJumpFactor = 1.6f;
 inline constexpr float kMoonGravityFactor = 0.35f;
 inline constexpr float kSuperSpeedFactor = 1.8f;
+inline constexpr float kSlowFactor = 0.5f;
+inline constexpr float kTinyJumpFactor = 0.4f;
+// Mario's speed (units per frame) when launched; a jump starts near 22.
+inline constexpr float kLaunchSpeed = 60.0f;
+// Where Mario stood is noted this often, while on the ground, for this long.
+inline constexpr std::uint64_t kPositionEveryMs = 250u;
+inline constexpr std::uint64_t kRewindMs = 10'000u;
+// Teleports must move him at least this far (100 units ≈ 1 m), or they're
+// refused as pointless.
+inline constexpr float kMinTeleportDistance = 300.0f;
+// After the scene loads, Mario respawns or a teleport, the harshest troll
+// actions wait this long, so they can't be chained.
+inline constexpr std::uint64_t kTrollGraceMs = 5'000u;
+// Mario's hook not running this long means a scene change (or a load).
+inline constexpr std::uint64_t kSceneGapMs = 1'000u;
 // Longest a timed action may last, whatever a request asks for.
 inline constexpr std::uint64_t kMaxTimedMs = 60'000u;
 // A queued action that can't run this long (Mario not controllable) is dropped.
@@ -60,6 +85,7 @@ inline constexpr std::uint64_t kGameActionSpacingMs = 300u;
 inline constexpr std::size_t kGameQueueMax = 16u;
 
 // MR::changePlayerItemStatus: what the game's items do.
+inline constexpr std::int32_t kItemNormal = 0;
 inline constexpr std::int32_t kItemSpring = 1;
 inline constexpr std::int32_t kItemBee = 2;
 inline constexpr std::int32_t kItemBoo = 3;
@@ -68,6 +94,8 @@ inline constexpr std::int32_t kItemFire = 5;
 inline constexpr std::int32_t kItemFlying = 6;
 inline constexpr std::int32_t kItemRainbowStar = 7;
 inline constexpr std::int32_t kItemLifeUp = 10;
+
+using Vec3 = std::array<float, 3>;
 
 // What the game thread reads and changes. The site hook implements it with
 // guest calls; tests use a fake.
@@ -97,17 +125,32 @@ public:
     virtual std::uint32_t const_table() = 0;
     virtual float read_f32(std::uint32_t address) = 0;
     virtual void write_f32(std::uint32_t address, float value) = 0;
+    // Where Mario is (LiveActor::mPosition).
+    virtual Vec3 position() = 0;
+    // Standing on something, and not held by an object (launch star, bubble…).
+    virtual bool on_ground() = 0;
+    virtual bool in_rush() = 0;
+    // Moved there and left standing still, as the game's warps do.
+    virtual void teleport(const Vec3& position) = 0;
+    // Thrown against his gravity at `speed`.
+    virtual void launch(float speed) = 0;
+    // MarioActor::mPlayerMode: 0 without a power-up.
+    virtual std::uint32_t power_mode() = 0;
 };
 
 // The id Cloud90 sends ("heal"…) → the action, if known.
 [[nodiscard]] std::optional<GameAction> game_action_from_name(std::string_view name) noexcept;
 
-// Whether the action lasts the duration Cloud90 sends (Giant…SuperSpeed).
+// Whether the action lasts the duration Cloud90 sends (Giant…TinyJump).
 [[nodiscard]] bool game_action_timed(GameAction action) noexcept;
 
+// Whether the action bothers the streamer: a shield refuses it.
+[[nodiscard]] bool game_action_troll(GameAction action) noexcept;
+
 // Any thread. Whether the action would do something now: Mario can move and
-// it isn't pointless (full health, last life, no star bits…) or impossible
-// (a power-up this galaxy doesn't have).
+// it isn't pointless (full health, last life, no star bits…), impossible
+// (a power-up this galaxy doesn't have) or held back (a shield, the grace
+// after a respawn).
 [[nodiscard]] bool game_action_applicable(GameAction action, std::uint64_t now_ms) noexcept;
 
 // Any thread. Queues the action for the game thread (`duration_ms` for the

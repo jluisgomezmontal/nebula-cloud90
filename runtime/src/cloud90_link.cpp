@@ -329,6 +329,8 @@ void handle_message(Connection& conn, const std::string& msg) {
         if (!effect && !action) reason = "efecto desconocido";
         else if ((effect || game_action_timed(*action)) && ms <= 0) reason = "duración inválida";
         else if (paused()) reason = "en pausa";
+        else if ((effect ? effect_troll(*effect) : game_action_troll(*action)) && shield_active())
+            reason = "escudo activo";
         else if (effect ? !effect_applicable(*effect) : !game_action_applicable(*action, now_ms))
             reason = "no disponible ahora";
         else if (action && !request_game_action(*action, now_ms,

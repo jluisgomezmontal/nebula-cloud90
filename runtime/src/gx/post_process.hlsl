@@ -332,6 +332,16 @@ float4 PSMain(FullscreenOut i) : SV_Target {
         d.x *= g_rt_metrics.z * g_rt_metrics.y;              // round, not oval
         c *= smoothstep(0.42, 0.18, length(d));
     }
+    if (flags & 2048u) {                                     // blackout: a small hole
+        float2 d = uv - 0.5;
+        d.x *= g_rt_metrics.z * g_rt_metrics.y;
+        c *= smoothstep(0.13, 0.08, length(d));
+    }
+    if (flags & 4096u) {                                     // shield: pulsing blue edge
+        const float2 e = min(uv, 1.0 - uv);
+        const float edge = smoothstep(0.06, 0.0, min(e.x, e.y * g_rt_metrics.w * g_rt_metrics.x));
+        c = lerp(c, float3(0.35, 0.75, 1.0), edge * (0.55 + 0.25 * sin(t * 4.0)));
+    }
     return float4(c, 1.0);
 }
 #endif

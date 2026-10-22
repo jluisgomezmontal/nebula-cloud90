@@ -2218,9 +2218,24 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // key: ends every effect and pauses the chat's; F9 again resumes.
         // F7 tries the spin effect (5 s) the same way; F6 the next screen
         // effect each press (8 s). F5 the next change to the game itself
-        // (heal, damage, 1-up, life down, star bits +/-, coins +/-) each press.
-        if (!was_down && (wp == VK_F5 || wp == VK_F6 || wp == VK_F7 || wp == VK_F8 || wp == VK_F9)) {
-            if (wp == VK_F5) {
+        // (heal, damage, 1-up, life down, star bits +/-, coins +/-) each press;
+        // F4 only the troll ones (back to start, rewind, launch… 10 s).
+        if (!was_down &&
+            (wp == VK_F4 || wp == VK_F5 || wp == VK_F6 || wp == VK_F7 || wp == VK_F8 || wp == VK_F9)) {
+            if (wp == VK_F4) {
+                using galaxy::cloud90::GameAction;
+                static constexpr GameAction kTroll[] = {
+                    GameAction::BackToStart, GameAction::Rewind, GameAction::Launch, GameAction::RemovePower,
+                    GameAction::IceFloor,    GameAction::Slow,   GameAction::TinyJump};
+                static std::size_t s_next_troll = 0;
+                galaxy::cloud90::set_paused(false);
+                galaxy::cloud90::request_game_action(
+                    kTroll[s_next_troll],
+                    static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count()),
+                    10'000u);
+                s_next_troll = (s_next_troll + 1) % std::size(kTroll);
+            } else if (wp == VK_F5) {
                 static int s_next_action = 0;
                 constexpr int kCount = static_cast<int>(galaxy::cloud90::GameAction::Count);
                 galaxy::cloud90::set_paused(false);

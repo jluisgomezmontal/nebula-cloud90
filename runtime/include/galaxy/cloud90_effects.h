@@ -36,6 +36,11 @@ enum class Effect : std::uint8_t {
     GameBoy,         // four shades of green
     Fisheye,         // bulging middle
     Blur,            // out of focus
+    Blackout,        // all black but a small circle in the middle
+    // Not troll: viewers on the streamer's side send it. While it lasts every
+    // troll effect and action is refused ("escudo activo"); a glow at the
+    // screen's edges shows it. Panic leaves it running.
+    Shield,
     Count,
 };
 
@@ -76,6 +81,13 @@ void set_spin_available(bool available) noexcept;
 // Whether an effect would show now: false for the spin before Mario has
 // it. The link answers "no disponible ahora" instead of queueing it.
 [[nodiscard]] bool effect_applicable(Effect effect) noexcept;
+
+// Whether the effect bothers the streamer (everything but the shield).
+[[nodiscard]] bool effect_troll(Effect effect) noexcept;
+
+// Any thread. Whether a shield is running (also behind a menu, where its
+// time stands still).
+[[nodiscard]] bool shield_active() noexcept;
 
 // Whether the last report was during play (not a menu), for the link to
 // tell Cloud90 to hold effects.

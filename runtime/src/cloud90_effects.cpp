@@ -31,6 +31,7 @@ std::atomic<bool> g_paused{false};
 std::atomic<bool> g_in_play{true};
 std::atomic<std::uint32_t> g_screen_flags{0};
 std::atomic<bool> g_spin_available{true};
+std::atomic<bool> g_shield_active{false};
 
 // Input thread only (plus remaining_vi, read on the same thread or in tests).
 std::array<std::uint64_t, kEffectCount> g_until{};  // VI an effect ends at
@@ -63,7 +64,12 @@ void take_pending(std::uint64_t vi) {
         panic_now = g_panic_requested;
         g_panic_requested = false;
     }
-    if (panic_now) g_until.fill(0);
+    if (panic_now) {
+        // The shield only protects: panic ends everything else.
+        const std::uint64_t shield = g_until[static_cast<std::size_t>(Effect::Shield)];
+        g_until.fill(0);
+        g_until[static_cast<std::size_t>(Effect::Shield)] = shield;
+    }
     for (const Pending& p : pending) {
         auto& until = g_until[static_cast<std::size_t>(p.effect)];
         // A repeat extends from whichever ends later: now or the current run.
@@ -125,6 +131,7 @@ void apply_input_effects(galaxy::input::WiimoteInputSnapshot& snapshot,
             if (g_until[e] > vi) flags |= 1u << (e - static_cast<std::size_t>(Effect::FlipScreen));
     }
     g_screen_flags.store(flags, std::memory_order_relaxed);
+    g_shield_active.store(active(Effect::Shield, vi), std::memory_order_relaxed);
     if (!in_play) return;
 
     auto& stick = snapshot.nunchuk;
@@ -195,8 +202,14 @@ std::optional<Effect> effect_from_name(std::string_view name) noexcept {
     if (name == "gameboy") return Effect::GameBoy;
     if (name == "fisheye") return Effect::Fisheye;
     if (name == "blur") return Effect::Blur;
+    if (name == "blackout") return Effect::Blackout;
+    if (name == "shield") return Effect::Shield;
     return std::nullopt;
 }
+
+bool effect_troll(Effect effect) noexcept { return effect < Effect::Count && effect != Effect::Shield; }
+
+bool shield_active() noexcept { return g_shield_active.load(std::memory_order_relaxed); }
 
 bool in_play() noexcept { return g_in_play.load(std::memory_order_relaxed); }
 
@@ -233,6 +246,7 @@ void reset_for_tests() noexcept {
     g_spin_frames_left = 0;
     g_screen_flags.store(0);
     g_spin_available.store(true);
+    g_shield_active.store(false);
 }
 
 }  // namespace galaxy::cloud90

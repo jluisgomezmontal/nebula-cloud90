@@ -201,8 +201,41 @@ public:
     void write_f32(std::uint32_t address, float value) override {
         guest_store_u32(memory_, address, std::bit_cast<std::uint32_t>(value), services_, pc_);
     }
+    // LiveActor::mPosition (+0x0C).
+    cloud90::Vec3 position() override {
+        return {read_f32(actor_ + 0x0Cu), read_f32(actor_ + 0x10u), read_f32(actor_ + 0x14u)};
+    }
+    // MR::isOnGroundPlayer, MR::isPlayerInRush (bound to an object: a launch
+    // star's flight, a bubble, a shell ride…).
+    bool on_ground() override { return (call(0x803F1E64u, 0u) & 0xFFu) != 0u; }
+    bool in_rush() override { return (call(0x803F26D0u, 0u) & 0xFFu) != 0u; }
+    // MR::setPlayerPosAndWait(const TVec3f&): the move, then standing still.
+    void teleport(const cloud90::Vec3& position) override { call_with_vec(0x803F2528u, position); }
+    // MR::forceJumpPlayer(const TVec3f& velocity), against
+    // MarioActor::getGravityVec() (a unit vector).
+    void launch(float speed) override {
+        const std::uint32_t gravity = call(0x802B902Cu, actor_);
+        if (!rmge01_guest_object(gravity)) return;
+        cloud90::Vec3 velocity{};
+        for (std::uint32_t axis = 0; axis < 3u; ++axis) velocity[axis] = -read_f32(gravity + axis * 4u) * speed;
+        call_with_vec(0x803F240Cu, velocity);
+    }
+    // MarioActor::mPlayerMode, a u16 at +0x3D4.
+    std::uint32_t power_mode() override { return guest_load_u32(memory_, actor_ + 0x3D4u, services_, pc_) >> 16; }
 
 private:
+    // Calls `function(const TVec3f&)` with the vector in a frame of its own
+    // under the stack pointer (back chain at +0, the vector at +0x10).
+    void call_with_vec(std::uint32_t function, const cloud90::Vec3& vec) {
+        const std::uint32_t sp = context_->gpr[1];
+        const std::uint32_t frame = (sp - 0x20u) & ~0xFu;
+        guest_store_u32(memory_, frame, sp, services_, pc_);
+        for (std::uint32_t axis = 0; axis < 3u; ++axis) write_f32(frame + 0x10u + axis * 4u, vec[axis]);
+        context_->gpr[1] = frame;
+        call(function, frame + 0x10u);
+        context_->gpr[1] = sp;
+    }
+
     // MR::getGameSceneLayoutHolder() +0x34: the CounterLayoutController, or 0.
     std::uint32_t layout_counters() {
         const std::uint32_t holder = call(0x80361738u, 0u);

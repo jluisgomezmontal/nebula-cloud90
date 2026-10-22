@@ -1,5 +1,6 @@
 #include "galaxy/cloud90_effects.h"
 #include "galaxy/cloud90_game.h"
+#include "galaxy/native_input.h"
 
 #include <algorithm>
 #include <array>
@@ -45,13 +46,31 @@ public:
     float mario_scale = 1.0f;
     float scale() override { return mario_scale; }
     void set_scale(float s) override { mario_scale = s; }
-    // A table of 0x240 bytes at guest address 0x80001000: float i is 1 + i.
-    std::array<float, 0x240 / 4> table{};
+    // A table of 0x300 bytes at guest address 0x80001000: float i is 1 + i.
+    std::array<float, 0x300 / 4> table{};
     FakePlayer() { for (std::size_t i = 0; i < table.size(); ++i) table[i] = 1.0f + static_cast<float>(i); }
     std::uint32_t const_table() override { return 0x80001000u; }
     float read_f32(std::uint32_t a) override { return table[(a - 0x80001000u) / 4u]; }
     void write_f32(std::uint32_t a, float v) override { table[(a - 0x80001000u) / 4u] = v; }
+    galaxy::cloud90::Vec3 pos{};
+    bool ground = true, rush = false;
+    int teleports = 0, launches = 0;
+    std::uint32_t mode = 0;
+    galaxy::cloud90::Vec3 position() override { return pos; }
+    bool on_ground() override { return ground; }
+    bool in_rush() override { return rush; }
+    void teleport(const galaxy::cloud90::Vec3& p) override { ++teleports; pos = p; }
+    void launch(float) override { ++launches; ground = false; }
+    std::uint32_t power_mode() override { return mode; }
 };
+
+// Mario walks along x, 100 units every 250 ms, from `from` ms to `to` ms.
+void walk(FakePlayer& p, std::uint64_t from, std::uint64_t to) {
+    for (std::uint64_t t = from; t <= to; t += 250) {
+        galaxy::cloud90::on_player_frame(p, t);
+        p.pos[0] += 100.0f;
+    }
+}
 
 void reset() {
     galaxy::cloud90::reset_game_for_tests();
@@ -248,6 +267,131 @@ bool test_panic_clears_and_pause_refuses() {
     return ok;
 }
 
+bool test_back_to_start() {
+    reset();
+    FakePlayer p;
+    p.pos = {10.0f, 20.0f, 30.0f};
+    walk(p, 0, 1000);
+    bool ok = expect(galaxy::cloud90::game_action_applicable(GameAction::BackToStart, 1000), "far from the start");
+    galaxy::cloud90::request_game_action(GameAction::BackToStart, 1000);
+    galaxy::cloud90::on_player_frame(p, 1100);
+    ok &= expect(p.teleports == 1 && p.pos[0] == 10.0f && p.pos[2] == 30.0f, "back where he first stood");
+    ok &= expect(!galaxy::cloud90::game_action_applicable(GameAction::BackToStart, 1200), "already there");
+    walk(p, 1350, 3000);
+    ok &= expect(!galaxy::cloud90::game_action_applicable(GameAction::BackToStart, 3000), "grace after a teleport");
+    walk(p, 3250, 1100 + galaxy::cloud90::kTrollGraceMs + 250);
+    ok &= expect(galaxy::cloud90::game_action_applicable(GameAction::BackToStart, 6400), "after the grace");
+    p.rush = true;
+    galaxy::cloud90::on_player_frame(p, 6450);
+    ok &= expect(!galaxy::cloud90::game_action_applicable(GameAction::BackToStart, 6460), "not in a launch star");
+    return ok;
+}
+
+bool test_start_is_the_scene_or_respawn() {
+    reset();
+    FakePlayer p;
+    p.ground = false;
+    walk(p, 0, 500);
+    bool ok = expect(!galaxy::cloud90::game_action_applicable(GameAction::BackToStart, 500), "never on the ground");
+    p.ground = true;
+    walk(p, 750, 2000);  // the start is x = 300
+    p.hp = 0;
+    galaxy::cloud90::on_player_frame(p, 2250);
+    p.hp = 3;
+    p.pos = {5000.0f, 0.0f, 0.0f};
+    walk(p, 2500, 3000);  // respawned: the start is x = 5000
+    ok &= expect(!galaxy::cloud90::game_action_applicable(GameAction::Damage, 3000), "grace after a respawn");
+    walk(p, 3250, 9000);
+    galaxy::cloud90::request_game_action(GameAction::BackToStart, 9000);
+    galaxy::cloud90::on_player_frame(p, 9100);
+    ok &= expect(p.pos[0] == 5000.0f, "the respawn point");
+    // A scene load (Mario's hook stopped for a while) forgets it too.
+    p.pos = {-800.0f, 0.0f, 0.0f};
+    walk(p, 9100 + galaxy::cloud90::kSceneGapMs + 10, 20000);
+    galaxy::cloud90::request_game_action(GameAction::BackToStart, 20000);
+    galaxy::cloud90::on_player_frame(p, 20100);
+    ok &= expect(p.pos[0] == -800.0f, "the new scene's start");
+    return ok;
+}
+
+bool test_rewind() {
+    reset();
+    FakePlayer p;
+    walk(p, 0, 1000);
+    bool ok = expect(!galaxy::cloud90::game_action_applicable(GameAction::Rewind, 1000), "under 2 s of history");
+    walk(p, 1250, 14000);
+    galaxy::cloud90::request_game_action(GameAction::Rewind, 14000);
+    const float before = p.pos[0];
+    galaxy::cloud90::on_player_frame(p, 14100);
+    // 14100 - 10000 = 4100: the last sample by then was at 4000 (x = 1600).
+    ok &= expect(p.teleports == 1 && p.pos[0] == 1600.0f && before > p.pos[0], "about 10 s back");
+    return ok;
+}
+
+bool test_launch_and_remove_power() {
+    reset();
+    FakePlayer p;
+    galaxy::cloud90::on_player_frame(p, 0);
+    bool ok = expect(!galaxy::cloud90::game_action_applicable(GameAction::RemovePower, 10), "no power-up");
+    p.mode = 2;
+    galaxy::cloud90::request_game_action(GameAction::Launch, 10);
+    galaxy::cloud90::on_player_frame(p, 20);
+    ok &= expect(p.launches == 1, "launched");
+    galaxy::cloud90::request_game_action(GameAction::RemovePower, 20);
+    galaxy::cloud90::on_player_frame(p, 400);
+    ok &= expect(p.item == galaxy::cloud90::kItemNormal, "power-up gone");
+    return ok;
+}
+
+bool test_new_timed_and_opposites() {
+    reset();
+    FakePlayer p;
+    const std::size_t speed = 0x224 / 4, stop = 0x228 / 4, ice_stop = 0x294 / 4, brake = 0x2DC / 4;
+    galaxy::cloud90::request_game_action(GameAction::IceFloor, 0, 1000);
+    galaxy::cloud90::on_player_frame(p, 0);
+    bool ok = expect(near(p.table[stop], 1.0f + ice_stop) && near(p.table[brake], 1.0f + 0x2A0 / 4),
+                     "ice grip on every ground");
+    galaxy::cloud90::on_player_frame(p, 1001);
+    ok &= expect(near(p.table[stop], 1.0f + stop) && near(p.table[brake], 1.0f + brake), "ice over");
+    galaxy::cloud90::request_game_action(GameAction::SuperSpeed, 2000, 5000);
+    galaxy::cloud90::on_player_frame(p, 2000);
+    galaxy::cloud90::request_game_action(GameAction::Slow, 2300, 5000);
+    galaxy::cloud90::on_player_frame(p, 2300);
+    ok &= expect(near(p.table[speed], (1.0f + speed) * galaxy::cloud90::kSlowFactor),
+                 "slow ends super speed, from the game's own value");
+    galaxy::cloud90::on_player_frame(p, 8000);
+    ok &= expect(near(p.table[speed], 1.0f + speed), "both over: back to the game's value");
+    return ok;
+}
+
+bool test_shield() {
+    reset();
+    galaxy::cloud90::reset_for_tests();
+    FakePlayer p;
+    p.hp = 2;
+    galaxy::cloud90::on_player_frame(p, 0);
+    galaxy::input::WiimoteInputSnapshot snapshot{};
+    galaxy::cloud90::enqueue(galaxy::cloud90::Effect::Shield, 1000);
+    galaxy::cloud90::apply_input_effects(snapshot, 1, true);
+    bool ok = expect(galaxy::cloud90::shield_active(), "shield on");
+    ok &= expect(!galaxy::cloud90::game_action_applicable(GameAction::Damage, 10), "troll refused");
+    ok &= expect(galaxy::cloud90::game_action_applicable(GameAction::Heal, 10), "help still welcome");
+    galaxy::cloud90::request_game_action(GameAction::Damage, 10);
+    galaxy::cloud90::on_player_frame(p, 20);
+    ok &= expect(p.hp == 2, "queued before the shield, refused when it runs");
+    galaxy::cloud90::panic();
+    galaxy::cloud90::set_paused(false);
+    galaxy::cloud90::apply_input_effects(snapshot, 2, true);
+    ok &= expect(galaxy::cloud90::shield_active(), "panic leaves the shield");
+    galaxy::cloud90::apply_input_effects(snapshot, 1 + 61, true);
+    ok &= expect(!galaxy::cloud90::shield_active(), "shield over");
+    ok &= expect(!galaxy::cloud90::game_action_troll(GameAction::Heal) &&
+                     galaxy::cloud90::game_action_troll(GameAction::BackToStart),
+                 "what's troll");
+    galaxy::cloud90::reset_for_tests();
+    return ok;
+}
+
 bool test_queue_is_bounded() {
     reset();
     for (std::size_t i = 0; i < galaxy::cloud90::kGameQueueMax; ++i)
@@ -272,6 +416,12 @@ int main() {
     ok &= test_old_requests_expire();
     ok &= test_panic_clears_and_pause_refuses();
     ok &= test_queue_is_bounded();
+    ok &= test_back_to_start();
+    ok &= test_start_is_the_scene_or_respawn();
+    ok &= test_rewind();
+    ok &= test_launch_and_remove_power();
+    ok &= test_new_timed_and_opposites();
+    ok &= test_shield();
     if (ok) std::cout << "cloud90 game tests passed\n";
     return ok ? 0 : 1;
 }

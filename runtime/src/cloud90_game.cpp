@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <deque>
 #include <mutex>
 
@@ -30,31 +31,58 @@ std::atomic<std::int32_t> g_star_bits{0};
 std::atomic<std::int32_t> g_coins{0};
 // Bit n: item status n can be given now (its models are loaded).
 std::atomic<std::uint32_t> g_items_ready{0};
+std::atomic<std::uint32_t> g_power_mode{0};
+std::atomic<bool> g_in_rush{false};
+std::atomic<bool> g_can_back_to_start{false};
+std::atomic<bool> g_can_rewind{false};
+std::atomic<std::uint64_t> g_grace_until_ms{0};
 // Panic from another thread: the game thread ends what's running.
 std::atomic<bool> g_clear_requested{false};
 
-// The timed actions, Giant..SuperSpeed.
+// The timed actions, Giant..TinyJump.
 constexpr std::size_t kTimedFirst = static_cast<std::size_t>(GameAction::Giant);
 constexpr std::size_t kTimedCount = static_cast<std::size_t>(GameAction::Count) - kTimedFirst;
 
-// Floats of MarioConstTable a timed action scales: [first, first + 4 * count).
+// Floats of MarioConstTable a timed action changes: [first, first + 4 * count),
+// scaled by `factor`, or set to the floats at `source` when it isn't 0.
 struct TableChange {
     GameAction action;
     std::uint32_t first;
     std::uint32_t count;
     float factor;
+    std::uint32_t source;
 };
-constexpr std::array<TableChange, 3> kTableChanges{{
-    {GameAction::SuperJump, 0x000u, 9u, kSuperJumpFactor},     // mJumpHeight[9]
-    {GameAction::MoonGravity, 0x024u, 12u, kMoonGravityFactor},  // mGravityJumping[12]
-    {GameAction::SuperSpeed, 0x224u, 1u, kSuperSpeedFactor},   // mWalkSpeed
+constexpr std::array<TableChange, 10> kTableChanges{{
+    {GameAction::SuperJump, 0x000u, 9u, kSuperJumpFactor, 0u},     // mJumpHeight[9]
+    {GameAction::MoonGravity, 0x024u, 12u, kMoonGravityFactor, 0u},  // mGravityJumping[12]
+    {GameAction::SuperSpeed, 0x224u, 1u, kSuperSpeedFactor, 0u},   // mWalkSpeed
+    {GameAction::Slow, 0x224u, 1u, kSlowFactor, 0u},
+    {GameAction::TinyJump, 0x000u, 9u, kTinyJumpFactor, 0u},
+    // The grip on ice the table holds for icy ground, on every ground.
+    {GameAction::IceFloor, 0x228u, 1u, 1.0f, 0x294u},  // mInertiaStandardStop <- Ice
+    {GameAction::IceFloor, 0x22Cu, 1u, 1.0f, 0x298u},  // mInertiaStandardMax <- Ice
+    {GameAction::IceFloor, 0x250u, 1u, 1.0f, 0x29Cu},  // mInertiaStartSpin <- Ice
+    {GameAction::IceFloor, 0x238u, 1u, 1.0f, 0x2A0u},  // mInertiaStop <- IceStop
+    {GameAction::IceFloor, 0x2DCu, 1u, 1.0f, 0x2A0u},  // mInertiaBrake <- IceStop
 }};
 constexpr std::size_t kMaxTableFloats = 12u;
+
+// Timed actions that change the same floats the other way: the one asked
+// for last ends the other.
+constexpr std::array<std::array<GameAction, 2>, 2> kOpposites{{
+    {GameAction::SuperSpeed, GameAction::Slow},
+    {GameAction::SuperJump, GameAction::TinyJump},
+}};
 
 struct SavedTable {
     bool saved = false;
     std::uint32_t table = 0;
     std::array<float, kMaxTableFloats> values{};
+};
+
+struct Sample {
+    std::uint64_t at_ms;
+    Vec3 position;
 };
 
 // Game thread only.
@@ -66,6 +94,13 @@ std::array<std::uint64_t, kTimedCount> g_timed_until{};
 bool g_scale_saved = false;
 float g_saved_scale = 1.0f;
 std::array<SavedTable, kTableChanges.size()> g_saved_tables{};
+// Where Mario stood (on the ground), oldest first, and where he first stood
+// in this scene or since he respawned.
+std::deque<Sample> g_positions;
+bool g_has_start = false;
+Vec3 g_start{};
+std::uint64_t g_last_sample_ms = 0;
+bool g_was_dead = false;
 
 std::size_t timed_index(GameAction action) noexcept {
     return static_cast<std::size_t>(action) - kTimedFirst;
@@ -75,6 +110,23 @@ bool fresh(std::uint64_t now_ms) noexcept {
     if (!g_seen_frame.load(std::memory_order_acquire)) return false;
     const std::uint64_t last = g_last_frame_ms.load(std::memory_order_acquire);
     return now_ms >= last ? now_ms - last <= kPlayerFreshMs : true;
+}
+
+float distance(const Vec3& a, const Vec3& b) noexcept {
+    const float x = a[0] - b[0], y = a[1] - b[1], z = a[2] - b[2];
+    return std::sqrt(x * x + y * y + z * z);
+}
+
+// Where a rewind goes: the last place noted kRewindMs ago or before, else
+// the oldest one, if it's at least 2 s old.
+const Sample* rewind_target(std::uint64_t now_ms) noexcept {
+    const Sample* best = nullptr;
+    for (const Sample& s : g_positions) {
+        if (now_ms - s.at_ms < kRewindMs) break;
+        best = &s;
+    }
+    if (!best && !g_positions.empty() && now_ms - g_positions.front().at_ms >= 2'000u) best = &g_positions.front();
+    return best;
 }
 
 std::int32_t item_of(GameAction action) noexcept {
@@ -90,10 +142,26 @@ std::int32_t item_of(GameAction action) noexcept {
     }
 }
 
+// The harshest: held back for kTrollGraceMs after a respawn or a teleport.
+bool needs_grace(GameAction action) noexcept {
+    switch (action) {
+    case GameAction::Damage:
+    case GameAction::LifeDown:
+    case GameAction::Death:
+    case GameAction::BackToStart:
+    case GameAction::Rewind:
+    case GameAction::Launch: return true;
+    default: return false;
+    }
+}
+
 // Against values the caller read, so the link (atomics) and the game thread
 // (live reads) apply the same rules.
-bool useful(GameAction action, std::uint32_t health, std::uint32_t max_health, std::int32_t lives,
-            std::int32_t star_bits, std::int32_t coins) noexcept {
+bool useful(GameAction action, std::uint64_t now_ms, std::uint32_t health, std::uint32_t max_health,
+            std::int32_t lives, std::int32_t star_bits, std::int32_t coins) noexcept {
+    if (game_action_troll(action) && shield_active()) return false;
+    if (needs_grace(action) && now_ms < g_grace_until_ms.load(std::memory_order_relaxed)) return false;
+    const bool free = !g_in_rush.load(std::memory_order_relaxed);
     switch (action) {
     case GameAction::Heal: return health > 0 && health < max_health;
     case GameAction::Damage: return health > 1;
@@ -114,11 +182,19 @@ bool useful(GameAction action, std::uint32_t health, std::uint32_t max_health, s
     case GameAction::PowerFire:
     case GameAction::PowerFlying:
         return (g_items_ready.load(std::memory_order_relaxed) >> item_of(action)) & 1u;
+    case GameAction::BackToStart:
+        return health > 0 && free && g_can_back_to_start.load(std::memory_order_relaxed);
+    case GameAction::Rewind: return health > 0 && free && g_can_rewind.load(std::memory_order_relaxed);
+    case GameAction::Launch: return health > 0 && free;
+    case GameAction::RemovePower: return g_power_mode.load(std::memory_order_relaxed) != 0u;
     case GameAction::Giant:
     case GameAction::Mini:
     case GameAction::SuperJump:
     case GameAction::MoonGravity:
-    case GameAction::SuperSpeed: return true;
+    case GameAction::SuperSpeed:
+    case GameAction::IceFloor:
+    case GameAction::Slow:
+    case GameAction::TinyJump: return true;
     case GameAction::Count: break;
     }
     return false;
@@ -130,6 +206,41 @@ void refresh_items_ready(PlayerAccess& player) noexcept {
          {kItemSpring, kItemBee, kItemBoo, kItemIce, kItemFire, kItemFlying, kItemRainbowStar})
         if (player.item_ready(item)) ready |= 1u << item;
     g_items_ready.store(ready, std::memory_order_relaxed);
+}
+
+// A new scene, a respawn or a teleport: the places noted before don't count
+// (only a new scene or a respawn forget the start) and the harshest troll
+// actions wait.
+void start_over(std::uint64_t now_ms, bool forget_start) noexcept {
+    g_positions.clear();
+    g_last_sample_ms = 0;
+    if (forget_start) g_has_start = false;
+    g_grace_until_ms.store(now_ms + kTrollGraceMs, std::memory_order_relaxed);
+}
+
+// Notes where Mario stands and publishes what the teleports can do.
+void track_position(PlayerAccess& player, std::uint64_t now_ms, std::uint32_t health) noexcept {
+    const bool rush = player.in_rush();
+    g_in_rush.store(rush, std::memory_order_relaxed);
+    const Vec3 here = player.position();
+    if (health > 0 && !rush && (g_last_sample_ms == 0 || now_ms - g_last_sample_ms >= kPositionEveryMs) &&
+        player.on_ground()) {
+        try {
+            g_positions.push_back({now_ms, here});
+        } catch (...) {
+        }
+        g_last_sample_ms = now_ms;
+        if (!g_has_start) {
+            g_start = here;
+            g_has_start = true;
+        }
+    }
+    while (!g_positions.empty() && now_ms - g_positions.front().at_ms > kRewindMs + 2'000u)
+        g_positions.pop_front();
+    g_can_back_to_start.store(g_has_start && distance(here, g_start) >= kMinTeleportDistance,
+                              std::memory_order_relaxed);
+    const Sample* back = rewind_target(now_ms);
+    g_can_rewind.store(back && distance(here, back->position) >= kMinTeleportDistance, std::memory_order_relaxed);
 }
 
 // Keeps the timed actions applied while they run and puts everything back
@@ -154,24 +265,30 @@ void apply_timed(PlayerAccess& player, std::uint64_t now_ms) noexcept {
         g_scale_saved = false;
     }
 
+    // Everything that ended is put back first, so an action that changes the
+    // same floats saves the game's own values, not the ended one's.
     for (std::size_t i = 0; i < kTableChanges.size(); ++i) {
         const TableChange& change = kTableChanges[i];
         SavedTable& saved = g_saved_tables[i];
-        if (active(change.action) && !saved.saved) {
-            const std::uint32_t table = player.const_table();
-            if (table == 0u) continue;
-            for (std::uint32_t f = 0; f < change.count; ++f) {
-                const std::uint32_t address = table + change.first + f * 4u;
-                saved.values[f] = player.read_f32(address);
-                player.write_f32(address, saved.values[f] * change.factor);
-            }
-            saved.table = table;
-            saved.saved = true;
-        } else if (!active(change.action) && saved.saved) {
-            for (std::uint32_t f = 0; f < change.count; ++f)
-                player.write_f32(saved.table + change.first + f * 4u, saved.values[f]);
-            saved.saved = false;
+        if (active(change.action) || !saved.saved) continue;
+        for (std::uint32_t f = 0; f < change.count; ++f)
+            player.write_f32(saved.table + change.first + f * 4u, saved.values[f]);
+        saved.saved = false;
+    }
+    for (std::size_t i = 0; i < kTableChanges.size(); ++i) {
+        const TableChange& change = kTableChanges[i];
+        SavedTable& saved = g_saved_tables[i];
+        if (!active(change.action) || saved.saved) continue;
+        const std::uint32_t table = player.const_table();
+        if (table == 0u) continue;
+        for (std::uint32_t f = 0; f < change.count; ++f) {
+            const std::uint32_t address = table + change.first + f * 4u;
+            saved.values[f] = player.read_f32(address);
+            player.write_f32(address, change.source != 0u ? player.read_f32(table + change.source + f * 4u)
+                                                          : saved.values[f] * change.factor);
         }
+        saved.table = table;
+        saved.saved = true;
     }
 }
 
@@ -196,11 +313,18 @@ std::optional<GameAction> game_action_from_name(std::string_view name) noexcept 
     if (name == "power_ice") return GameAction::PowerIce;
     if (name == "power_fire") return GameAction::PowerFire;
     if (name == "power_flying") return GameAction::PowerFlying;
+    if (name == "back_to_start") return GameAction::BackToStart;
+    if (name == "rewind") return GameAction::Rewind;
+    if (name == "launch") return GameAction::Launch;
+    if (name == "remove_power") return GameAction::RemovePower;
     if (name == "giant") return GameAction::Giant;
     if (name == "mini") return GameAction::Mini;
     if (name == "super_jump") return GameAction::SuperJump;
     if (name == "moon_gravity") return GameAction::MoonGravity;
     if (name == "super_speed") return GameAction::SuperSpeed;
+    if (name == "ice_floor") return GameAction::IceFloor;
+    if (name == "slow") return GameAction::Slow;
+    if (name == "tiny_jump") return GameAction::TinyJump;
     return std::nullopt;
 }
 
@@ -208,9 +332,29 @@ bool game_action_timed(GameAction action) noexcept {
     return action >= GameAction::Giant && action < GameAction::Count;
 }
 
+bool game_action_troll(GameAction action) noexcept {
+    switch (action) {
+    case GameAction::Damage:
+    case GameAction::LifeDown:
+    case GameAction::StarBitsRemove:
+    case GameAction::CoinsRemove:
+    case GameAction::CameraShake:
+    case GameAction::Death:
+    case GameAction::BackToStart:
+    case GameAction::Rewind:
+    case GameAction::Launch:
+    case GameAction::RemovePower:
+    case GameAction::Mini:
+    case GameAction::IceFloor:
+    case GameAction::Slow:
+    case GameAction::TinyJump: return true;
+    default: return false;
+    }
+}
+
 bool game_action_applicable(GameAction action, std::uint64_t now_ms) noexcept {
     if (action >= GameAction::Count || !fresh(now_ms)) return false;
-    return useful(action, g_health.load(std::memory_order_relaxed),
+    return useful(action, now_ms, g_health.load(std::memory_order_relaxed),
                   g_max_health.load(std::memory_order_relaxed), g_lives.load(std::memory_order_relaxed),
                   g_star_bits.load(std::memory_order_relaxed), g_coins.load(std::memory_order_relaxed));
 }
@@ -238,7 +382,22 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
         g_shake_until_ms = 0;
         g_timed_until.fill(0);
     }
+    // Mario's update stopping for a while is a scene load; health 0 is a
+    // death, and him having health again the respawn.
+    const std::uint64_t last = g_last_frame_ms.load(std::memory_order_relaxed);
+    if (g_seen_frame.load(std::memory_order_relaxed) && now_ms > last && now_ms - last >= kSceneGapMs)
+        start_over(now_ms, true);
+    if (health == 0) {
+        g_positions.clear();
+        g_has_start = false;
+        g_was_dead = true;
+    } else if (g_was_dead) {
+        g_was_dead = false;
+        start_over(now_ms, true);
+    }
     refresh_items_ready(player);
+    g_power_mode.store(player.power_mode(), std::memory_order_relaxed);
+    track_position(player, now_ms, health);
 
     std::optional<Queued> next;
     if (!paused() && (!g_has_last_action || now_ms - g_last_action_ms >= kGameActionSpacingMs)) {
@@ -254,7 +413,7 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
         }
     }
     // Checked again here: several queued actions may have used it up.
-    if (next && useful(next->action, health, max_health, lives, star_bits, coins)) {
+    if (next && useful(next->action, now_ms, health, max_health, lives, star_bits, coins)) {
         switch (next->action) {
         case GameAction::Heal: player.heal(1); break;
         case GameAction::Damage: player.damage(); break;
@@ -279,11 +438,30 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
         case GameAction::PowerIce:
         case GameAction::PowerFire:
         case GameAction::PowerFlying: player.item_status(item_of(next->action)); break;
+        case GameAction::BackToStart:
+            player.teleport(g_start);
+            start_over(now_ms, false);
+            break;
+        case GameAction::Rewind:
+            if (const Sample* back = rewind_target(now_ms)) {
+                player.teleport(back->position);
+                start_over(now_ms, false);
+            }
+            break;
+        case GameAction::Launch: player.launch(kLaunchSpeed); break;
+        case GameAction::RemovePower: player.item_status(kItemNormal); break;
         case GameAction::Giant:
         case GameAction::Mini:
         case GameAction::SuperJump:
         case GameAction::MoonGravity:
-        case GameAction::SuperSpeed: {
+        case GameAction::SuperSpeed:
+        case GameAction::IceFloor:
+        case GameAction::Slow:
+        case GameAction::TinyJump: {
+            for (const auto& pair : kOpposites) {
+                if (pair[0] == next->action) g_timed_until[timed_index(pair[1])] = 0;
+                if (pair[1] == next->action) g_timed_until[timed_index(pair[0])] = 0;
+            }
             // A repeat extends from whichever ends later: now or the current run.
             auto& until = g_timed_until[timed_index(next->action)];
             until = std::max(until, now_ms) + std::min<std::uint64_t>(next->duration_ms, kMaxTimedMs);
@@ -342,6 +520,11 @@ void reset_game_for_tests() noexcept {
     g_star_bits.store(0);
     g_coins.store(0);
     g_items_ready.store(0);
+    g_power_mode.store(0);
+    g_in_rush.store(false);
+    g_can_back_to_start.store(false);
+    g_can_rewind.store(false);
+    g_grace_until_ms.store(0);
     g_has_last_action = false;
     g_last_action_ms = 0;
     g_shake_until_ms = 0;
@@ -350,6 +533,11 @@ void reset_game_for_tests() noexcept {
     g_scale_saved = false;
     g_saved_scale = 1.0f;
     g_saved_tables = {};
+    g_positions.clear();
+    g_has_start = false;
+    g_start = {};
+    g_last_sample_ms = 0;
+    g_was_dead = false;
 }
 
 }  // namespace galaxy::cloud90
