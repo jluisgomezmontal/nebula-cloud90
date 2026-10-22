@@ -340,6 +340,11 @@ void handle_message(Connection& conn, const std::string& msg) {
             reason = "no disponible ahora";
         if (reason.empty() && effect)
             enqueue(*effect, static_cast<std::uint32_t>(std::min<long long>(ms, kMaxEffectMs)));
+        try {
+            write_log("efecto " + name + (reason.empty() ? ": ok" : ": " + reason) +
+                      (action && !reason.empty() ? " [" + game_debug_state(now_ms) + "]" : ""));
+        } catch (...) {
+        }
         conn.send("{\"type\":\"ack\",\"id\":\"" + escape(id) + "\",\"ok\":" + (reason.empty() ? "true" : "false") +
                   (reason.empty() ? "" : ",\"reason\":\"" + reason + "\"") + "}");
     } else if (type == "pause") {

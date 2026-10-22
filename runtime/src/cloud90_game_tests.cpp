@@ -62,6 +62,8 @@ public:
     void teleport(const galaxy::cloud90::Vec3& p) override { ++teleports; pos = p; }
     void launch(float) override { ++launches; ground = false; }
     std::uint32_t power_mode() override { return mode; }
+    std::uint32_t scene = 1;
+    std::uint32_t scene_id() override { return scene; }
 };
 
 // Mario walks along x, 100 units every 250 ms, from `from` ms to `to` ms.
@@ -305,11 +307,17 @@ bool test_start_is_the_scene_or_respawn() {
     galaxy::cloud90::request_game_action(GameAction::BackToStart, 9000);
     galaxy::cloud90::on_player_frame(p, 9100);
     ok &= expect(p.pos[0] == 5000.0f, "the respawn point");
-    // A scene load (Mario's hook stopped for a while) forgets it too.
+    // A dialog or the pause menu stops Mario's update: the start stays.
+    walk(p, 14200, 15000);
+    galaxy::cloud90::request_game_action(GameAction::BackToStart, 15000);
+    galaxy::cloud90::on_player_frame(p, 15100);
+    ok &= expect(p.pos[0] == 5000.0f, "a pause keeps the start");
+    // Another stage or mission forgets it.
+    p.scene = 2;
     p.pos = {-800.0f, 0.0f, 0.0f};
-    walk(p, 9100 + galaxy::cloud90::kSceneGapMs + 10, 20000);
-    galaxy::cloud90::request_game_action(GameAction::BackToStart, 20000);
-    galaxy::cloud90::on_player_frame(p, 20100);
+    walk(p, 15350, 22000);
+    galaxy::cloud90::request_game_action(GameAction::BackToStart, 22000);
+    galaxy::cloud90::on_player_frame(p, 22100);
     ok &= expect(p.pos[0] == -800.0f, "the new scene's start");
     return ok;
 }

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 
 // Cloud90 Game Link phase 5 (PLAN-GAME-LINK.md): live-stream events change
@@ -72,8 +73,6 @@ inline constexpr float kMinTeleportDistance = 300.0f;
 // After the scene loads, Mario respawns or a teleport, the harshest troll
 // actions wait this long, so they can't be chained.
 inline constexpr std::uint64_t kTrollGraceMs = 5'000u;
-// Mario's hook not running this long means a scene change (or a load).
-inline constexpr std::uint64_t kSceneGapMs = 1'000u;
 // Longest a timed action may last, whatever a request asks for.
 inline constexpr std::uint64_t kMaxTimedMs = 60'000u;
 // A queued action that can't run this long (Mario not controllable) is dropped.
@@ -136,6 +135,10 @@ public:
     virtual void launch(float speed) = 0;
     // MarioActor::mPlayerMode: 0 without a power-up.
     virtual std::uint32_t power_mode() = 0;
+    // A number for the stage and mission being played: it changes with the
+    // scene. (Mario's update stopping isn't one: dialogs, signs, cutscenes
+    // and the pause menu stop it too.)
+    virtual std::uint32_t scene_id() = 0;
 };
 
 // The id Cloud90 sends ("heal"…) → the action, if known.
@@ -152,6 +155,10 @@ public:
 // (a power-up this galaxy doesn't have) or held back (a shield, the grace
 // after a respawn).
 [[nodiscard]] bool game_action_applicable(GameAction action, std::uint64_t now_ms) noexcept;
+
+// Any thread. What the troll actions see now, for the link's log
+// ("start=1 start_dist=820 rewind_dist=0 ground=1 rush=0 grace_ms=0 power=0").
+[[nodiscard]] std::string game_debug_state(std::uint64_t now_ms);
 
 // Any thread. Queues the action for the game thread (`duration_ms` for the
 // timed ones, clamped to kMaxTimedMs); false while paused or with the queue

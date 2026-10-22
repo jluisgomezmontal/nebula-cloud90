@@ -222,6 +222,19 @@ public:
     }
     // MarioActor::mPlayerMode, a u16 at +0x3D4.
     std::uint32_t power_mode() override { return guest_load_u32(memory_, actor_ + 0x3D4u, services_, pc_) >> 16; }
+    // MR::getCurrentStageName (FNV-1a of up to 64 bytes) with
+    // MR::getCurrentScenarioNo.
+    std::uint32_t scene_id() override {
+        std::uint32_t hash = 2166136261u ^ call(0x803F5A7Cu, 0u);
+        const std::uint32_t name = call(0x803F5AB8u, 0u);
+        if (!rmge01_guest_object(name & ~3u)) return hash;
+        for (std::uint32_t i = 0; i < 64u; ++i) {
+            const std::uint32_t byte = guest_load_u8(memory_, name + i, services_, pc_);
+            if (byte == 0u) break;
+            hash = (hash ^ byte) * 16777619u;
+        }
+        return hash;
+    }
 
 private:
     // Calls `function(const TVec3f&)` with the vector in a frame of its own

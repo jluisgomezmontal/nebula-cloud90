@@ -36,6 +36,10 @@ std::atomic<bool> g_in_rush{false};
 std::atomic<bool> g_can_back_to_start{false};
 std::atomic<bool> g_can_rewind{false};
 std::atomic<std::uint64_t> g_grace_until_ms{0};
+// For the log only: -1 = no start / no rewind point.
+std::atomic<float> g_start_distance{-1.0f};
+std::atomic<float> g_rewind_distance{-1.0f};
+std::atomic<bool> g_on_ground{false};
 // Panic from another thread: the game thread ends what's running.
 std::atomic<bool> g_clear_requested{false};
 
@@ -101,6 +105,7 @@ bool g_has_start = false;
 Vec3 g_start{};
 std::uint64_t g_last_sample_ms = 0;
 bool g_was_dead = false;
+std::uint32_t g_scene = 0;
 
 std::size_t timed_index(GameAction action) noexcept {
     return static_cast<std::size_t>(action) - kTimedFirst;
@@ -223,8 +228,10 @@ void track_position(PlayerAccess& player, std::uint64_t now_ms, std::uint32_t he
     const bool rush = player.in_rush();
     g_in_rush.store(rush, std::memory_order_relaxed);
     const Vec3 here = player.position();
+    const bool ground = player.on_ground();
+    g_on_ground.store(ground, std::memory_order_relaxed);
     if (health > 0 && !rush && (g_last_sample_ms == 0 || now_ms - g_last_sample_ms >= kPositionEveryMs) &&
-        player.on_ground()) {
+        ground) {
         try {
             g_positions.push_back({now_ms, here});
         } catch (...) {
@@ -237,10 +244,13 @@ void track_position(PlayerAccess& player, std::uint64_t now_ms, std::uint32_t he
     }
     while (!g_positions.empty() && now_ms - g_positions.front().at_ms > kRewindMs + 2'000u)
         g_positions.pop_front();
-    g_can_back_to_start.store(g_has_start && distance(here, g_start) >= kMinTeleportDistance,
-                              std::memory_order_relaxed);
+    const float to_start = g_has_start ? distance(here, g_start) : -1.0f;
+    g_start_distance.store(to_start, std::memory_order_relaxed);
+    g_can_back_to_start.store(to_start >= kMinTeleportDistance, std::memory_order_relaxed);
     const Sample* back = rewind_target(now_ms);
-    g_can_rewind.store(back && distance(here, back->position) >= kMinTeleportDistance, std::memory_order_relaxed);
+    const float to_back = back ? distance(here, back->position) : -1.0f;
+    g_rewind_distance.store(to_back, std::memory_order_relaxed);
+    g_can_rewind.store(to_back >= kMinTeleportDistance, std::memory_order_relaxed);
 }
 
 // Keeps the timed actions applied while they run and puts everything back
@@ -359,6 +369,21 @@ bool game_action_applicable(GameAction action, std::uint64_t now_ms) noexcept {
                   g_star_bits.load(std::memory_order_relaxed), g_coins.load(std::memory_order_relaxed));
 }
 
+std::string game_debug_state(std::uint64_t now_ms) {
+    const std::uint64_t grace = g_grace_until_ms.load(std::memory_order_relaxed);
+    const auto whole = [](float v) { return std::to_string(static_cast<long>(std::lround(v))); };
+    const float to_start = g_start_distance.load(std::memory_order_relaxed);
+    const float to_back = g_rewind_distance.load(std::memory_order_relaxed);
+    return std::string("fresh=") + (fresh(now_ms) ? "1" : "0") + " start=" + (to_start >= 0.0f ? "1" : "0") +
+           " start_dist=" + whole(to_start) + " rewind_dist=" + whole(to_back) +
+           " ground=" + (g_on_ground.load(std::memory_order_relaxed) ? "1" : "0") +
+           " rush=" + (g_in_rush.load(std::memory_order_relaxed) ? "1" : "0") +
+           " grace_ms=" + std::to_string(grace > now_ms ? grace - now_ms : 0u) +
+           " power=" + std::to_string(g_power_mode.load(std::memory_order_relaxed)) +
+           " hp=" + std::to_string(g_health.load(std::memory_order_relaxed)) +
+           " shield=" + (shield_active() ? "1" : "0");
+}
+
 bool request_game_action(GameAction action, std::uint64_t now_ms, std::uint32_t duration_ms) noexcept {
     if (action >= GameAction::Count || paused()) return false;
     if (game_action_timed(action) && duration_ms == 0u) return false;
@@ -382,11 +407,11 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
         g_shake_until_ms = 0;
         g_timed_until.fill(0);
     }
-    // Mario's update stopping for a while is a scene load; health 0 is a
-    // death, and him having health again the respawn.
-    const std::uint64_t last = g_last_frame_ms.load(std::memory_order_relaxed);
-    if (g_seen_frame.load(std::memory_order_relaxed) && now_ms > last && now_ms - last >= kSceneGapMs)
-        start_over(now_ms, true);
+    // Another stage or mission is a new scene; health 0 is a death, and him
+    // having health again the respawn.
+    const std::uint32_t scene = player.scene_id();
+    if (g_seen_frame.load(std::memory_order_relaxed) && scene != g_scene) start_over(now_ms, true);
+    g_scene = scene;
     if (health == 0) {
         g_positions.clear();
         g_has_start = false;
@@ -525,6 +550,9 @@ void reset_game_for_tests() noexcept {
     g_can_back_to_start.store(false);
     g_can_rewind.store(false);
     g_grace_until_ms.store(0);
+    g_start_distance.store(-1.0f);
+    g_rewind_distance.store(-1.0f);
+    g_on_ground.store(false);
     g_has_last_action = false;
     g_last_action_ms = 0;
     g_shake_until_ms = 0;
@@ -538,6 +566,7 @@ void reset_game_for_tests() noexcept {
     g_start = {};
     g_last_sample_ms = 0;
     g_was_dead = false;
+    g_scene = 0;
 }
 
 }  // namespace galaxy::cloud90
