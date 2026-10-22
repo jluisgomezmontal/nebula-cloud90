@@ -32,6 +32,8 @@ std::atomic<std::int32_t> g_coins{0};
 // Bit n: item status n can be given now (its models are loaded).
 std::atomic<std::uint32_t> g_items_ready{0};
 std::atomic<std::uint32_t> g_power_mode{0};
+// Bit n: an EnemyKind n is waiting to come out.
+std::atomic<std::uint32_t> g_enemies_ready{0};
 std::atomic<bool> g_in_rush{false};
 std::atomic<bool> g_can_back_to_start{false};
 std::atomic<bool> g_can_rewind{false};
@@ -134,6 +136,10 @@ const Sample* rewind_target(std::uint64_t now_ms) noexcept {
     return best;
 }
 
+EnemyKind enemy_of(GameAction action) noexcept {
+    return action == GameAction::SpawnBombomb ? EnemyKind::Bombomb : EnemyKind::Goomba;
+}
+
 std::int32_t item_of(GameAction action) noexcept {
     switch (action) {
     case GameAction::Rainbow: return kItemRainbowStar;
@@ -192,6 +198,10 @@ bool useful(GameAction action, std::uint64_t now_ms, std::uint32_t health, std::
     case GameAction::Rewind: return health > 0 && free && g_can_rewind.load(std::memory_order_relaxed);
     case GameAction::Launch: return health > 0 && free;
     case GameAction::RemovePower: return g_power_mode.load(std::memory_order_relaxed) != 0u;
+    case GameAction::SpawnGoomba:
+    case GameAction::SpawnBombomb:
+        return health > 0 && free &&
+               ((g_enemies_ready.load(std::memory_order_relaxed) >> static_cast<std::uint32_t>(enemy_of(action))) & 1u);
     case GameAction::Giant:
     case GameAction::Mini:
     case GameAction::SuperJump:
@@ -211,6 +221,10 @@ void refresh_items_ready(PlayerAccess& player) noexcept {
          {kItemSpring, kItemBee, kItemBoo, kItemIce, kItemFire, kItemFlying, kItemRainbowStar})
         if (player.item_ready(item)) ready |= 1u << item;
     g_items_ready.store(ready, std::memory_order_relaxed);
+    std::uint32_t enemies = 0;
+    for (std::uint32_t kind = 0; kind < static_cast<std::uint32_t>(EnemyKind::Count); ++kind)
+        if (player.enemy_ready(static_cast<EnemyKind>(kind))) enemies |= 1u << kind;
+    g_enemies_ready.store(enemies, std::memory_order_relaxed);
 }
 
 // A new scene, a respawn or a teleport: the places noted before don't count
@@ -327,6 +341,8 @@ std::optional<GameAction> game_action_from_name(std::string_view name) noexcept 
     if (name == "rewind") return GameAction::Rewind;
     if (name == "launch") return GameAction::Launch;
     if (name == "remove_power") return GameAction::RemovePower;
+    if (name == "spawn_goomba") return GameAction::SpawnGoomba;
+    if (name == "spawn_bombomb") return GameAction::SpawnBombomb;
     if (name == "giant") return GameAction::Giant;
     if (name == "mini") return GameAction::Mini;
     if (name == "super_jump") return GameAction::SuperJump;
@@ -354,6 +370,8 @@ bool game_action_troll(GameAction action) noexcept {
     case GameAction::Rewind:
     case GameAction::Launch:
     case GameAction::RemovePower:
+    case GameAction::SpawnGoomba:
+    case GameAction::SpawnBombomb:
     case GameAction::Mini:
     case GameAction::IceFloor:
     case GameAction::Slow:
@@ -380,6 +398,7 @@ std::string game_debug_state(std::uint64_t now_ms) {
            " rush=" + (g_in_rush.load(std::memory_order_relaxed) ? "1" : "0") +
            " grace_ms=" + std::to_string(grace > now_ms ? grace - now_ms : 0u) +
            " power=" + std::to_string(g_power_mode.load(std::memory_order_relaxed)) +
+           " enemies=" + std::to_string(g_enemies_ready.load(std::memory_order_relaxed)) +
            " hp=" + std::to_string(g_health.load(std::memory_order_relaxed)) +
            " shield=" + (shield_active() ? "1" : "0");
 }
@@ -475,6 +494,8 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
             break;
         case GameAction::Launch: player.launch(kLaunchSpeed); break;
         case GameAction::RemovePower: player.item_status(kItemNormal); break;
+        case GameAction::SpawnGoomba:
+        case GameAction::SpawnBombomb: player.spawn_enemy(enemy_of(next->action)); break;
         case GameAction::Giant:
         case GameAction::Mini:
         case GameAction::SuperJump:
@@ -546,6 +567,7 @@ void reset_game_for_tests() noexcept {
     g_coins.store(0);
     g_items_ready.store(0);
     g_power_mode.store(0);
+    g_enemies_ready.store(0);
     g_in_rush.store(false);
     g_can_back_to_start.store(false);
     g_can_rewind.store(false);

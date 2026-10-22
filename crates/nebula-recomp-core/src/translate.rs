@@ -7677,6 +7677,16 @@ fn emit_direct_guest_call_with_exact_fpu(
         if target == 0x802B_1CB4 && pc == 0x802B_0B20 {
             output.push_str(&site_hook_call(pc, "Cloud90Player", 0));
         }
+        // Cloud90 Game Link (PLAN-GAME-TROLL.md): GameScene::init right after
+        // it asked for the scenario's object archives (0), and right after it
+        // placed the stage's objects (1): the runtime asks for its enemies'
+        // archives with them and creates its enemies there, as the game does.
+        if target == 0x8034_4630 && pc == 0x8033_E624 {
+            output.push_str(&site_hook_call(pc, "Cloud90Scene", 0));
+        }
+        if target == 0x8034_465C && pc == 0x8033_E684 {
+            output.push_str(&site_hook_call(pc, "Cloud90Scene", 1));
+        }
         Ok(())
     }
 

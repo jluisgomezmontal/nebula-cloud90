@@ -42,7 +42,10 @@ use std::{fs, path::Path};
 //     every module.
 // 20 (Cloud90): Game Link's player hook after MarioActor::updateBehavior's
 //     updateLife (SiteHookKind 31); regenerate every module.
-pub const GENERATION_VERSION: u32 = 20;
+// 21 (Cloud90): Game Link's scene hooks in GameScene::init, after the
+//     scenario's archive requests and after placement (SiteHookKind 32);
+//     regenerate every module.
+pub const GENERATION_VERSION: u32 = 21;
 
 /// Shard size and per-shard source budget of the qualified module build.
 pub const MODULE_SHARD_SIZE: usize = 64;

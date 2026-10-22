@@ -516,6 +516,9 @@ enum class SiteHookKind : std::uint32_t {
     // Cloud90 Game Link: MarioActor::updateBehavior just ran updateLife, MarioActor in r30. Once
     // per frame, and only while Mario can move.
     Cloud90Player = 31,
+    // Cloud90 Game Link: GameScene::init just asked for the scenario's object archives (argument
+    // 0) or just placed the stage's objects (argument 1). Once each per scene load.
+    Cloud90Scene = 32,
 };
 
 inline void site_hook(

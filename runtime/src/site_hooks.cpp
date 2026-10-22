@@ -1,6 +1,7 @@
 #include "galaxy/site_hooks.h"
 
 #include "galaxy/cloud90_game.h"
+#include "galaxy/cloud90_link.h"
 #include "galaxy/experimental_ultrawide_aspect.h"
 #include "galaxy/layout_aspect.h"
 #include "galaxy/layout_aspect_cinema.h"
@@ -9,11 +10,13 @@
 #include "galaxy/runtime_settings.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <chrono>
 #include <initializer_list>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace galaxy {
 namespace {
@@ -87,15 +90,188 @@ void fit_rmge01_scenario_camera(GuestMemoryV1* memory, const NativeServicesV1* s
     }
 }
 
-// Cloud90 Game Link phase 5: Mario's state through the game's own functions
-// (addresses from the CC0 Petari RMGE01 symbols), called from the
-// Cloud90Player hook on the game thread. Every call leaves the registers as it
-// found them.
-class GuestPlayer final : public cloud90::PlayerAccess {
+// Calls into the game's own functions (addresses from the CC0 Petari RMGE01
+// symbols) from a Cloud90 hook on the game thread. Every call leaves the
+// registers as it found them; the hooks sit right after a call returns, so
+// the volatile float registers hold nothing then.
+class GuestCalls {
+protected:
+    GuestCalls(const NativeServicesV1* services, PpcContext* context, GuestMemoryV1* memory,
+               std::uint32_t pc) noexcept
+        : services_(services), context_(context), memory_(memory), pc_(pc) {}
+
+    std::uint32_t call(std::uint32_t function, std::uint32_t r3, std::uint32_t r4 = 0u, std::uint32_t r5 = 0u) {
+        std::uint32_t gpr[32];
+        std::copy(std::begin(context_->gpr), std::end(context_->gpr), gpr);
+        const std::uint32_t cr = context_->cr, lr = context_->lr, ctr = context_->ctr, xer = context_->xer;
+        context_->gpr[3] = r3;
+        context_->gpr[4] = r4;
+        context_->gpr[5] = r5;
+        services_->call_guest(services_->user, function, context_, memory_);
+        const std::uint32_t result = context_->gpr[3];
+        std::copy(std::begin(gpr), std::end(gpr), context_->gpr);
+        context_->cr = cr;
+        context_->lr = lr;
+        context_->ctr = ctr;
+        context_->xer = xer;
+        return result;
+    }
+    // A C++ virtual of a game object: its vtable is at +0.
+    std::uint32_t call_virtual(std::uint32_t object, std::uint32_t slot) {
+        const std::uint32_t vtable = guest_load_u32(memory_, object, services_, pc_);
+        if (!rmge01_guest_object(vtable)) return 0u;
+        const std::uint32_t function = guest_load_u32(memory_, vtable + slot, services_, pc_);
+        return rmge01_guest_object(function) ? call(function, object) : 0u;
+    }
+    // Runs `body(buffer)` with `size` bytes of guest memory in a stack frame
+    // of its own under the stack pointer (back chain at +0, the buffer at
+    // +0x10), for the game's functions that take a pointer.
+    template <typename Body>
+    void with_stack(std::uint32_t size, Body body) {
+        const std::uint32_t sp = context_->gpr[1];
+        const std::uint32_t frame = (sp - (size + 0x10u + 0xFu)) & ~0xFu;
+        guest_store_u32(memory_, frame, sp, services_, pc_);
+        context_->gpr[1] = frame;
+        body(frame + 0x10u);
+        context_->gpr[1] = sp;
+    }
+    void store_text(std::uint32_t address, const char* text) {
+        for (std::uint32_t i = 0;; ++i) {
+            guest_store_u8(memory_, address + i, static_cast<std::uint8_t>(text[i]), services_, pc_);
+            if (text[i] == '\0') break;
+        }
+    }
+    float load_f32(std::uint32_t address) {
+        return std::bit_cast<float>(guest_load_u32(memory_, address, services_, pc_));
+    }
+    void store_f32(std::uint32_t address, float value) {
+        guest_store_u32(memory_, address, std::bit_cast<std::uint32_t>(value), services_, pc_);
+    }
+
+    const NativeServicesV1* services_;
+    PpcContext* context_;
+    GuestMemoryV1* memory_;
+    std::uint32_t pc_;
+};
+
+// LiveActor's virtuals (vtable offsets).
+constexpr std::uint32_t kVtAppear = 0x24u;
+constexpr std::uint32_t kVtMakeActorDead = 0x30u;
+
+// Cloud90 Game Link enemies (PLAN-GAME-TROLL.md): with every galaxy a few of
+// each are created dead, as the game makes its own pools (BossStinkBugBomb…):
+// their archive asked for with the stage's objects, then the class's factory
+// function and NameObj::initWithoutIter, which these classes take (each
+// checks MR::isValidInfo before reading placement data).
+struct EnemyDef {
+    const char* archive;  // ObjectData/<archive>.arc, also the object's name
+    std::uint32_t creator;  // NameObjFactory's createNameObj<Class>(const char*)
+    std::uint32_t nerve;    // its first state again when it comes out (0: appear() does it)
+    std::uint32_t count;
+};
+constexpr std::array<EnemyDef, static_cast<std::size_t>(cloud90::EnemyKind::Count)> kEnemies{{
+    {"Kuribo", 0x80264E38u, 0x8069F9B0u, 3u},   // KuriboNrvWander
+    {"BombHei", 0x80264D38u, 0u, 2u},           // BombHei::appear sets its own
+}};
+// The scene's heaps must keep this much free after our enemies (bytes,
+// MR::getSceneHeapNapa + MR::getSceneHeapGDDR3).
+constexpr std::uint32_t kEnemyHeapReserve = 1u << 20;
+
+// The current scene's enemies (guest addresses). Game thread only: filled by
+// the Cloud90Scene hook, read by Mario's.
+std::array<std::vector<std::uint32_t>, static_cast<std::size_t>(cloud90::EnemyKind::Count)> g_enemy_pool;
+bool g_enemy_archives_asked = false;
+
+class GuestScene final : GuestCalls {
+public:
+    GuestScene(const NativeServicesV1* services, PpcContext* context, GuestMemoryV1* memory,
+               std::uint32_t pc) noexcept
+        : GuestCalls(services, context, memory, pc) {}
+
+    // After GameScene::init asked for the scenario's object archives: ours
+    // too, outside the Observatory and with room in the scene's heaps.
+    void ask_archives() {
+        for (auto& pool : g_enemy_pool) pool.clear();
+        g_enemy_archives_asked = false;
+        const std::string stage = stage_name();
+        const std::uint32_t free = heap_free();
+        cloud90::log_event("escena " + stage + ": memoria libre " + std::to_string(free / 1024u) + " KB");
+        if (stage.empty() || stage.rfind("Astro", 0) == 0 || free < 2u * kEnemyHeapReserve) return;
+        for (const EnemyDef& def : kEnemies) {
+            with_stack(32u, [&](std::uint32_t name) {
+                store_text(name, def.archive);
+                if ((call(0x803CE2E4u, name) & 0xFFu) == 0u)  // MR::isLoadedObjectOrLayoutArchive
+                    call(0x803CDE94u, name, 0u);              // MR::mountAsyncArchiveByObjectOrLayoutName(name, null)
+            });
+        }
+        g_enemy_archives_asked = true;
+    }
+
+    // After the stage's objects were placed: the enemies, dead, while the
+    // scene still adds objects (initAfterPlacement reaches them too).
+    void create_enemies() {
+        if (!g_enemy_archives_asked) return;
+        std::string made;
+        for (std::size_t kind = 0; kind < kEnemies.size(); ++kind) {
+            const EnemyDef& def = kEnemies[kind];
+            std::uint32_t count = 0;
+            for (; count < def.count && heap_free() >= kEnemyHeapReserve; ++count) {
+                // The name stays with the object: on the scene's heap
+                // (operator new, freed with the scene).
+                const std::uint32_t name = call(0x80409AF8u, 16u);
+                if (!rmge01_guest_object(name)) break;
+                store_text(name, def.archive);
+                const std::uint32_t enemy = call(def.creator, name);
+                if (!rmge01_guest_object(enemy)) break;
+                call(0x8026120Cu, enemy);  // NameObj::initWithoutIter
+                call_virtual(enemy, kVtMakeActorDead);
+                g_enemy_pool[kind].push_back(enemy);
+            }
+            made += std::string(made.empty() ? "" : ", ") + def.archive + " x" + std::to_string(count);
+        }
+        cloud90::log_event("enemigos listos: " + made + "; memoria libre " + std::to_string(heap_free() / 1024u) +
+                           " KB");
+    }
+
+private:
+    // MR::getCurrentStageName.
+    std::string stage_name() {
+        const std::uint32_t name = call(0x803F5AB8u, 0u);
+        std::string out;
+        if (!rmge01_guest_object(name & ~3u)) return out;
+        for (std::uint32_t i = 0; i < 64u; ++i) {
+            const auto byte = static_cast<char>(guest_load_u8(memory_, name + i, services_, pc_));
+            if (byte == '\0') break;
+            out += byte;
+        }
+        return out;
+    }
+    // JKRHeap::getFreeSize of MR::getSceneHeapNapa and MR::getSceneHeapGDDR3.
+    std::uint32_t heap_free() {
+        std::uint32_t total = 0;
+        for (const std::uint32_t getter : {0x803E7444u, 0x803E7450u}) {
+            const std::uint32_t heap = call(getter, 0u);
+            if (rmge01_guest_object(heap)) total += call(0x80409794u, heap);
+        }
+        return total;
+    }
+};
+
+void run_cloud90_scene(const NativeServicesV1* services, PpcContext* context, GuestMemoryV1* memory,
+                       std::uint32_t pc, std::uint32_t argument) {
+    if (services->call_guest == nullptr) return;
+    GuestScene scene(services, context, memory, pc);
+    if (argument == 0u) scene.ask_archives();
+    else scene.create_enemies();
+}
+
+// Cloud90 Game Link phase 5: Mario's state through the game's own
+// functions, from the Cloud90Player hook.
+class GuestPlayer final : public cloud90::PlayerAccess, GuestCalls {
 public:
     GuestPlayer(const NativeServicesV1* services, PpcContext* context, GuestMemoryV1* memory,
                 std::uint32_t actor, std::uint32_t pc) noexcept
-        : services_(services), context_(context), memory_(memory), actor_(actor), pc_(pc) {}
+        : GuestCalls(services, context, memory, pc), actor_(actor) {}
 
     // MarioActor::mHealth / mMaxHealth.
     std::uint32_t health() override { return guest_load_u32(memory_, actor_ + 0x380u, services_, pc_); }
@@ -236,17 +412,49 @@ public:
         return hash;
     }
 
+    bool enemy_ready(cloud90::EnemyKind kind) override { return waiting_enemy(kind) != 0u; }
+    // The enemy, set down kEnemyAhead in front of Mario and kEnemyAbove
+    // over him (it falls to the ground), facing nowhere in particular, back
+    // to its first state, alive.
+    void spawn_enemy(cloud90::EnemyKind kind) override {
+        const std::uint32_t enemy = waiting_enemy(kind);
+        const std::uint32_t gravity = call(0x802B902Cu, actor_);
+        if (!enemy || !rmge01_guest_object(gravity)) return;
+        cloud90::Vec3 front{};
+        with_stack(16u, [&](std::uint32_t buffer) {
+            call(0x803F2128u, buffer);  // MR::getPlayerFrontVec(TVec3f*)
+            for (std::uint32_t axis = 0; axis < 3u; ++axis) front[axis] = load_f32(buffer + axis * 4u);
+        });
+        const cloud90::Vec3 at = position();
+        cloud90::Vec3 spot{};
+        for (std::uint32_t axis = 0; axis < 3u; ++axis)
+            spot[axis] = at[axis] + front[axis] * kEnemyAhead - load_f32(gravity + axis * 4u) * kEnemyAbove;
+        with_stack(16u, [&](std::uint32_t buffer) {
+            for (std::uint32_t axis = 0; axis < 3u; ++axis) store_f32(buffer + axis * 4u, spot[axis]);
+            call(0x803BED4Cu, enemy, buffer);  // MR::resetPosition(LiveActor*, const TVec3f&)
+        });
+        call_virtual(enemy, kVtAppear);
+        if (const std::uint32_t nerve = kEnemies[static_cast<std::size_t>(kind)].nerve)
+            call(0x80165824u, enemy, nerve);  // LiveActor::setNerve
+    }
+
 private:
-    // Calls `function(const TVec3f&)` with the vector in a frame of its own
-    // under the stack pointer (back chain at +0, the vector at +0x10).
+    static constexpr float kEnemyAhead = 600.0f;
+    static constexpr float kEnemyAbove = 150.0f;
+
+    // A dead one of this galaxy's pool, or 0. MR::isDead(const LiveActor*).
+    std::uint32_t waiting_enemy(cloud90::EnemyKind kind) {
+        for (const std::uint32_t enemy : g_enemy_pool[static_cast<std::size_t>(kind)])
+            if ((call(0x803DD748u, enemy) & 0xFFu) != 0u) return enemy;
+        return 0u;
+    }
+
+    // Calls `function(const TVec3f&)`.
     void call_with_vec(std::uint32_t function, const cloud90::Vec3& vec) {
-        const std::uint32_t sp = context_->gpr[1];
-        const std::uint32_t frame = (sp - 0x20u) & ~0xFu;
-        guest_store_u32(memory_, frame, sp, services_, pc_);
-        for (std::uint32_t axis = 0; axis < 3u; ++axis) write_f32(frame + 0x10u + axis * 4u, vec[axis]);
-        context_->gpr[1] = frame;
-        call(function, frame + 0x10u);
-        context_->gpr[1] = sp;
+        with_stack(16u, [&](std::uint32_t buffer) {
+            for (std::uint32_t axis = 0; axis < 3u; ++axis) store_f32(buffer + axis * 4u, vec[axis]);
+            call(function, buffer);
+        });
     }
 
     // MR::getGameSceneLayoutHolder() +0x34: the CounterLayoutController, or 0.
@@ -257,28 +465,7 @@ private:
         return rmge01_guest_object(counters) ? counters : 0u;
     }
 
-    std::uint32_t call(std::uint32_t function, std::uint32_t r3, std::uint32_t r4 = 0u, std::uint32_t r5 = 0u) {
-        std::uint32_t gpr[32];
-        std::copy(std::begin(context_->gpr), std::end(context_->gpr), gpr);
-        const std::uint32_t cr = context_->cr, lr = context_->lr, ctr = context_->ctr, xer = context_->xer;
-        context_->gpr[3] = r3;
-        context_->gpr[4] = r4;
-        context_->gpr[5] = r5;
-        services_->call_guest(services_->user, function, context_, memory_);
-        const std::uint32_t result = context_->gpr[3];
-        std::copy(std::begin(gpr), std::end(gpr), context_->gpr);
-        context_->cr = cr;
-        context_->lr = lr;
-        context_->ctr = ctr;
-        context_->xer = xer;
-        return result;
-    }
-
-    const NativeServicesV1* services_;
-    PpcContext* context_;
-    GuestMemoryV1* memory_;
     std::uint32_t actor_;
-    std::uint32_t pc_;
 };
 
 void run_cloud90_player(const NativeServicesV1* services, PpcContext* context, GuestMemoryV1* memory,
@@ -373,6 +560,9 @@ void dispatch_site_hook(
         // fixed at the first question of the session (game_language_for_boot).
         context->gpr[3] = static_cast<std::uint32_t>(game_language_for_boot());
         return;
+    case SiteHookKind::Cloud90Scene:
+        run_cloud90_scene(services, context, memory, guest_pc, argument);
+        break;
     case SiteHookKind::Cloud90Player:
         run_cloud90_player(services, context, memory, guest_pc);
         return;

@@ -64,6 +64,12 @@ public:
     std::uint32_t power_mode() override { return mode; }
     std::uint32_t scene = 1;
     std::uint32_t scene_id() override { return scene; }
+    std::array<int, 2> enemies_waiting{}, enemies_out{};
+    bool enemy_ready(galaxy::cloud90::EnemyKind k) override { return enemies_waiting[static_cast<int>(k)] > 0; }
+    void spawn_enemy(galaxy::cloud90::EnemyKind k) override {
+        --enemies_waiting[static_cast<int>(k)];
+        ++enemies_out[static_cast<int>(k)];
+    }
 };
 
 // Mario walks along x, 100 units every 250 ms, from `from` ms to `to` ms.
@@ -400,6 +406,26 @@ bool test_shield() {
     return ok;
 }
 
+bool test_enemies() {
+    reset();
+    FakePlayer p;
+    galaxy::cloud90::on_player_frame(p, 0);
+    bool ok = expect(!galaxy::cloud90::game_action_applicable(GameAction::SpawnGoomba, 10),
+                     "no Goombas made for this galaxy");
+    p.enemies_waiting = {2, 0};
+    galaxy::cloud90::on_player_frame(p, 20);
+    ok &= expect(galaxy::cloud90::game_action_applicable(GameAction::SpawnGoomba, 30), "Goombas waiting");
+    ok &= expect(!galaxy::cloud90::game_action_applicable(GameAction::SpawnBombomb, 30), "no Bob-ombs");
+    for (std::uint64_t t = 40; t < 40 + 3 * galaxy::cloud90::kGameActionSpacingMs; t += galaxy::cloud90::kGameActionSpacingMs) {
+        galaxy::cloud90::request_game_action(GameAction::SpawnGoomba, t);
+        galaxy::cloud90::on_player_frame(p, t);
+    }
+    ok &= expect(p.enemies_out[0] == 2 && p.enemies_waiting[0] == 0, "only as many as were made");
+    ok &= expect(galaxy::cloud90::game_action_troll(GameAction::SpawnBombomb), "troll");
+    ok &= expect(galaxy::cloud90::game_action_from_name("spawn_bombomb") == GameAction::SpawnBombomb, "name");
+    return ok;
+}
+
 bool test_queue_is_bounded() {
     reset();
     for (std::size_t i = 0; i < galaxy::cloud90::kGameQueueMax; ++i)
@@ -430,6 +456,7 @@ int main() {
     ok &= test_launch_and_remove_power();
     ok &= test_new_timed_and_opposites();
     ok &= test_shield();
+    ok &= test_enemies();
     if (ok) std::cout << "cloud90 game tests passed\n";
     return ok ? 0 : 1;
 }

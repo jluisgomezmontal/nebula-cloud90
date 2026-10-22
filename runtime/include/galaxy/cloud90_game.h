@@ -39,6 +39,8 @@ enum class GameAction : std::uint8_t {
     Rewind,          // back where he stood about kRewindMs ago
     Launch,          // thrown up, against his gravity, at kLaunchSpeed
     RemovePower,     // the power-up he has, gone
+    SpawnGoomba,     // an enemy comes to life in front of Mario (EnemyKind)
+    SpawnBombomb,
     // For the duration Cloud90 sends, then put back.
     Giant,           // Mario at kGiantScale
     Mini,            // Mario at kMiniScale
@@ -96,6 +98,10 @@ inline constexpr std::int32_t kItemLifeUp = 10;
 
 using Vec3 = std::array<float, 3>;
 
+// Enemies Cloud90 can bring (PLAN-GAME-TROLL.md): a few of each are created,
+// dead, with every galaxy, and come to life near Mario when asked.
+enum class EnemyKind : std::uint8_t { Goomba, Bombomb, Count };
+
 // What the game thread reads and changes. The site hook implements it with
 // guest calls; tests use a fake.
 class PlayerAccess {
@@ -139,6 +145,10 @@ public:
     // scene. (Mario's update stopping isn't one: dialogs, signs, cutscenes
     // and the pause menu stop it too.)
     virtual std::uint32_t scene_id() = 0;
+    // One of these enemies is waiting (created with this galaxy, not out).
+    virtual bool enemy_ready(EnemyKind kind) = 0;
+    // That one comes to life in front of Mario.
+    virtual void spawn_enemy(EnemyKind kind) = 0;
 };
 
 // The id Cloud90 sends ("heal"…) → the action, if known.
