@@ -137,7 +137,12 @@ const Sample* rewind_target(std::uint64_t now_ms) noexcept {
 }
 
 EnemyKind enemy_of(GameAction action) noexcept {
-    return action == GameAction::SpawnBombomb ? EnemyKind::Bombomb : EnemyKind::Goomba;
+    switch (action) {
+    case GameAction::SpawnBombomb: return EnemyKind::Bombomb;
+    case GameAction::SpawnBoo: return EnemyKind::Boo;
+    case GameAction::SpawnBulletBill: return EnemyKind::BulletBill;
+    default: return EnemyKind::Goomba;
+    }
 }
 
 std::int32_t item_of(GameAction action) noexcept {
@@ -200,6 +205,8 @@ bool useful(GameAction action, std::uint64_t now_ms, std::uint32_t health, std::
     case GameAction::RemovePower: return g_power_mode.load(std::memory_order_relaxed) != 0u;
     case GameAction::SpawnGoomba:
     case GameAction::SpawnBombomb:
+    case GameAction::SpawnBoo:
+    case GameAction::SpawnBulletBill:
         return health > 0 && free &&
                ((g_enemies_ready.load(std::memory_order_relaxed) >> static_cast<std::uint32_t>(enemy_of(action))) & 1u);
     case GameAction::Giant:
@@ -343,6 +350,8 @@ std::optional<GameAction> game_action_from_name(std::string_view name) noexcept 
     if (name == "remove_power") return GameAction::RemovePower;
     if (name == "spawn_goomba") return GameAction::SpawnGoomba;
     if (name == "spawn_bombomb") return GameAction::SpawnBombomb;
+    if (name == "spawn_boo") return GameAction::SpawnBoo;
+    if (name == "spawn_bullet_bill") return GameAction::SpawnBulletBill;
     if (name == "giant") return GameAction::Giant;
     if (name == "mini") return GameAction::Mini;
     if (name == "super_jump") return GameAction::SuperJump;
@@ -372,6 +381,8 @@ bool game_action_troll(GameAction action) noexcept {
     case GameAction::RemovePower:
     case GameAction::SpawnGoomba:
     case GameAction::SpawnBombomb:
+    case GameAction::SpawnBoo:
+    case GameAction::SpawnBulletBill:
     case GameAction::Mini:
     case GameAction::IceFloor:
     case GameAction::Slow:
@@ -495,7 +506,9 @@ void on_player_frame(PlayerAccess& player, std::uint64_t now_ms) noexcept {
         case GameAction::Launch: player.launch(kLaunchSpeed); break;
         case GameAction::RemovePower: player.item_status(kItemNormal); break;
         case GameAction::SpawnGoomba:
-        case GameAction::SpawnBombomb: player.spawn_enemy(enemy_of(next->action)); break;
+        case GameAction::SpawnBombomb:
+        case GameAction::SpawnBoo:
+        case GameAction::SpawnBulletBill: player.spawn_enemy(enemy_of(next->action)); break;
         case GameAction::Giant:
         case GameAction::Mini:
         case GameAction::SuperJump:

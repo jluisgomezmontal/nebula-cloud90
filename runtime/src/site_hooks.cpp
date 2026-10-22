@@ -165,13 +165,25 @@ constexpr std::uint32_t kVtMakeActorDead = 0x30u;
 // checks MR::isValidInfo before reading placement data).
 struct EnemyDef {
     const char* archive;  // ObjectData/<archive>.arc, also the object's name
-    std::uint32_t creator;  // NameObjFactory's createNameObj<Class>(const char*)
-    std::uint32_t nerve;    // its first state again when it comes out (0: appear() does it)
+    // NameObjFactory's createNameObj<Class>(const char*), or 0: operator
+    // new(size) and the constructor Class(const char*) instead.
+    std::uint32_t creator;
+    std::uint32_t size;
+    std::uint32_t constructor;
+    std::uint32_t nerve;  // its first state again when it comes out (0: appear() does it)
+    // Class::appear(const TVec3f& pos, const TVec3f& front) for one fired
+    // at Mario, or 0: set down in front of him and appear().
+    std::uint32_t fire;
     std::uint32_t count;
 };
 constexpr std::array<EnemyDef, static_cast<std::size_t>(cloud90::EnemyKind::Count)> kEnemies{{
-    {"Kuribo", 0x80264E38u, 0x8069F9B0u, 3u},   // KuriboNrvWander
-    {"BombHei", 0x80264D38u, 0u, 2u},           // BombHei::appear sets its own
+    {"Kuribo", 0x80264E38u, 0u, 0u, 0x8069F9B0u, 0u, 3u},   // KuriboNrvWander
+    {"BombHei", 0x80264D38u, 0u, 0u, 0u, 0u, 2u},           // BombHei::appear sets its own
+    // Teresa::appear: its start state (waits, chases while Mario looks away).
+    {"Teresa", 0x80265438u, 0u, 0u, 0u, 0u, 2u},
+    // A HomingKiller is placed as its launcher; the missile itself is made
+    // as the launcher makes it (new 0x168 bytes, HomingKiller(const char*)).
+    {"HomingKiller", 0u, 0x168u, 0x800F54BCu, 0u, 0x800F5A44u, 2u},
 }};
 // The scene's heaps must keep this much free after our enemies (bytes,
 // MR::getSceneHeapNapa + MR::getSceneHeapGDDR3).
@@ -224,7 +236,13 @@ public:
                 const std::uint32_t name = call(0x80409AF8u, 16u);
                 if (!rmge01_guest_object(name)) break;
                 store_text(name, def.archive);
-                const std::uint32_t enemy = call(def.creator, name);
+                std::uint32_t enemy = 0u;
+                if (def.creator) {
+                    enemy = call(def.creator, name);
+                } else {
+                    enemy = call(0x80409AF8u, def.size);  // operator new
+                    if (rmge01_guest_object(enemy)) call(def.constructor, enemy, name);
+                }
                 if (!rmge01_guest_object(enemy)) break;
                 call(0x8026120Cu, enemy);  // NameObj::initWithoutIter
                 call_virtual(enemy, kVtMakeActorDead);
@@ -429,7 +447,22 @@ public:
             for (std::uint32_t axis = 0; axis < 3u; ++axis) front[axis] = load_f32(buffer + axis * 4u);
         });
         const cloud90::Vec3 at = position();
+        const EnemyDef& def = kEnemies[static_cast<std::size_t>(kind)];
         cloud90::Vec3 spot{};
+        if (def.fire) {
+            // Fired from ahead of Mario, toward him; it turns after him
+            // once he's within its chase distance (2000).
+            for (std::uint32_t axis = 0; axis < 3u; ++axis)
+                spot[axis] = at[axis] + front[axis] * kMissileAhead - load_f32(gravity + axis * 4u) * kMissileAbove;
+            with_stack(32u, [&](std::uint32_t buffer) {
+                for (std::uint32_t axis = 0; axis < 3u; ++axis) {
+                    store_f32(buffer + axis * 4u, spot[axis]);
+                    store_f32(buffer + 16u + axis * 4u, -front[axis]);
+                }
+                call(def.fire, enemy, buffer, buffer + 16u);
+            });
+            return;
+        }
         for (std::uint32_t axis = 0; axis < 3u; ++axis)
             spot[axis] = at[axis] + front[axis] * kEnemyAhead - load_f32(gravity + axis * 4u) * kEnemyAbove;
         with_stack(16u, [&](std::uint32_t buffer) {
@@ -437,13 +470,14 @@ public:
             call(0x803BED4Cu, enemy, buffer);  // MR::resetPosition(LiveActor*, const TVec3f&)
         });
         call_virtual(enemy, kVtAppear);
-        if (const std::uint32_t nerve = kEnemies[static_cast<std::size_t>(kind)].nerve)
-            call(0x80165824u, enemy, nerve);  // LiveActor::setNerve
+        if (def.nerve) call(0x80165824u, enemy, def.nerve);  // LiveActor::setNerve
     }
 
 private:
     static constexpr float kEnemyAhead = 600.0f;
     static constexpr float kEnemyAbove = 150.0f;
+    static constexpr float kMissileAhead = 1500.0f;
+    static constexpr float kMissileAbove = 200.0f;
 
     // A dead one of this galaxy's pool, or 0. MR::isDead(const LiveActor*).
     std::uint32_t waiting_enemy(cloud90::EnemyKind kind) {

@@ -64,7 +64,7 @@ public:
     std::uint32_t power_mode() override { return mode; }
     std::uint32_t scene = 1;
     std::uint32_t scene_id() override { return scene; }
-    std::array<int, 2> enemies_waiting{}, enemies_out{};
+    std::array<int, static_cast<std::size_t>(galaxy::cloud90::EnemyKind::Count)> enemies_waiting{}, enemies_out{};
     bool enemy_ready(galaxy::cloud90::EnemyKind k) override { return enemies_waiting[static_cast<int>(k)] > 0; }
     void spawn_enemy(galaxy::cloud90::EnemyKind k) override {
         --enemies_waiting[static_cast<int>(k)];
@@ -412,7 +412,7 @@ bool test_enemies() {
     galaxy::cloud90::on_player_frame(p, 0);
     bool ok = expect(!galaxy::cloud90::game_action_applicable(GameAction::SpawnGoomba, 10),
                      "no Goombas made for this galaxy");
-    p.enemies_waiting = {2, 0};
+    p.enemies_waiting = {2, 0, 0, 1};
     galaxy::cloud90::on_player_frame(p, 20);
     ok &= expect(galaxy::cloud90::game_action_applicable(GameAction::SpawnGoomba, 30), "Goombas waiting");
     ok &= expect(!galaxy::cloud90::game_action_applicable(GameAction::SpawnBombomb, 30), "no Bob-ombs");
@@ -423,6 +423,12 @@ bool test_enemies() {
     ok &= expect(p.enemies_out[0] == 2 && p.enemies_waiting[0] == 0, "only as many as were made");
     ok &= expect(galaxy::cloud90::game_action_troll(GameAction::SpawnBombomb), "troll");
     ok &= expect(galaxy::cloud90::game_action_from_name("spawn_bombomb") == GameAction::SpawnBombomb, "name");
+    ok &= expect(galaxy::cloud90::game_action_applicable(GameAction::SpawnBulletBill, 700) &&
+                     !galaxy::cloud90::game_action_applicable(GameAction::SpawnBoo, 700),
+                 "each kind on its own");
+    galaxy::cloud90::request_game_action(GameAction::SpawnBulletBill, 700);
+    galaxy::cloud90::on_player_frame(p, 700);
+    ok &= expect(p.enemies_out[3] == 1, "a Bullet Bill fired");
     return ok;
 }
 
